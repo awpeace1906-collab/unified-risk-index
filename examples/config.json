@@ -1,4 +1,10 @@
 {
+  "weights_v2": {
+    "news2": 0.45,
+    "sofa": 0.3,
+    "crs2": 0.25
+  },
+  "model_path": null,
   "include_mews": true,
   "weights_with_mews": {
     "news2": 0.4,
@@ -15,7 +21,9 @@
     "news2": 20,
     "qsofa": 3,
     "mews": 14,
-    "crs": 30
+    "crs": 30,
+    "sofa": 15,
+    "crs2": 30
   },
   "window_multipliers": {
     "0-6h": 1.35,
@@ -41,12 +49,19 @@
   "bnp_severe_pg_ml": 400.0,
   "ntprobnp_severe_pg_ml": 1800.0,
   "shock_index_threshold": 1.0,
-  "obstetric_shock_index_threshold": 0.9,
-  "ob_points_per_log_or": 2.0,
-  "ob_points_cap": 6.0,
-  "ob_baseline_pph_risk": null,
+  "icu_location_patterns": [
+    "icu",
+    "intensive care",
+    "critical care",
+    "micu",
+    "sicu",
+    "ccu",
+    "cvicu"
+  ],
+  "lipase_uln_u_l": 60.0,
   "local_codes": {
-    "urn:oid:YOUR.SITE.OID|QBL": "qbl_ml",
-    "urn:oid:YOUR.SITE.OID|CFS": "cfs"
+    "urn:oid:YOUR.SITE.OID|O2DEV": "resp_support",
+    "urn:oid:YOUR.SITE.OID|CFS": "cfs",
+    "urn:oid:YOUR.SITE.OID|RRT": "outcome:rrt"
   }
 }

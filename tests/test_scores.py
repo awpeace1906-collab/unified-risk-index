@@ -65,16 +65,18 @@ class QsofaMewsTest(unittest.TestCase):
 
 
 class CompositeTest(unittest.TestCase):
-    def test_all_max_is_100_both_weightings(self):
-        totals = {"news2": 20, "qsofa": 3, "mews": 14, "crs": 30}
-        self.assertEqual(scores.composite(totals, Config())[0], 100.0)
-        self.assertEqual(scores.composite(totals, Config(include_mews=False))[0], 100.0)
+    def test_all_max_is_100_every_profile(self):
+        totals = {"news2": 20, "qsofa": 3, "mews": 14, "crs": 30, "sofa": 24, "crs2": 36}
+        for cfg in (Config(), Config(include_mews=False)):
+            self.assertEqual(scores.composite(totals, cfg.weights_v1(), cfg)[0], 100.0)
+        self.assertEqual(scores.composite(totals, Config().weights_v2, Config())[0], 100.0)
 
-    def test_weights_match_manuscript(self):
-        uri, parts = scores.composite({"news2": 10, "qsofa": 0, "mews": 0, "crs": 0}, Config())
-        self.assertEqual(uri, 20.0)  # 10/20 * 0.40 * 100
-        uri, _ = scores.composite({"news2": 10, "qsofa": 0, "mews": 0, "crs": 0}, Config(include_mews=False))
-        self.assertEqual(uri, 25.0)  # 10/20 * 0.50 * 100
+    def test_v1_weights_match_manuscript(self):
+        cfg = Config()
+        zero = {"news2": 10, "qsofa": 0, "mews": 0, "crs": 0}
+        self.assertEqual(scores.composite(zero, cfg.weights_v1(), cfg)[0], 20.0)  # 10/20 * 0.40
+        cfg = Config(include_mews=False)
+        self.assertEqual(scores.composite(zero, cfg.weights_v1(), cfg)[0], 25.0)  # 10/20 * 0.50
 
     def test_bands(self):
         for s, b in [(0, "LOW"), (20, "LOW"), (20.4, "LOW"), (21, "LOW-MODERATE"), (41, "MODERATE"),
@@ -102,13 +104,69 @@ class CrsTest(unittest.TestCase):
                        {"anticoagulant", "insulin", "opioid"}, 20, 3, Config())
         self.assertEqual(r.total, 30)
 
-    def test_obstetric_domain_uses_log_odds(self):
-        r = scores.crs({}, {}, {"ob_previa_abruption"}, set(), 0, 0, Config())
-        self.assertAlmostEqual(r.components["obstetric_hemorrhage"], 2.02, places=2)  # 2 * ln(2.74)
-
     def test_unweighted_factors_add_nothing(self):
-        r = scores.crs({}, {}, {"htn", "ob_accreta"}, {"diuretic"}, 0, 0, Config())
+        r = scores.crs({}, {}, {"htn", "pregnancy", "cci_chf"}, {"diuretic"}, 0, 0, Config())
         self.assertEqual(r.total, 0)
+
+
+class SofaTest(unittest.TestCase):
+    def test_normal_is_zero(self):
+        v = {**NORMAL, "plt": 250, "bilirubin": 0.6, "creatinine": 0.9}
+        r = scores.sofa(v, set())
+        self.assertEqual(r.total, 0)
+        self.assertEqual(r.missing, [])
+
+    def test_organ_bands(self):
+        v = {**NORMAL, "spo2": 98, "plt": 45, "bilirubin": 6.5, "creatinine": 3.6, "gcs": 9, "sbp": 85, "dbp": 50}
+        d = scores.sofa(v, set()).components
+        self.assertEqual((d["coagulation"], d["liver"], d["renal"], d["cns"], d["cardiovascular"]), (3, 3, 3, 3, 1))
+
+    def test_vasopressors_score_three_or_four(self):
+        self.assertEqual(scores.sofa({**NORMAL}, {"vasopressor"}, 1).components["cardiovascular"], 3)
+        self.assertEqual(scores.sofa({**NORMAL}, {"vasopressor"}, 2).components["cardiovascular"], 4)
+
+    def test_hfnc_counts_as_respiratory_support(self):
+        v = {"po2": 60, "fio2": 50, "resp_support": 2}  # P/F 120 on HFNC
+        self.assertEqual(scores.sofa(v, set()).components["respiration"], 3)
+        self.assertIn("respiration", scores.sofa({"spo2": 92, "o2_flow": 40, "resp_support": 2}, set()).missing)
+
+    def test_respiration_from_pao2_and_support(self):
+        # P/F 150 on HFNC FiO2 60% -> 3; same ratio without support caps at 2
+        self.assertEqual(scores.sofa({"po2": 90, "fio2": 60}, set()).components["respiration"], 3)
+        self.assertEqual(scores.sofa({"po2": 30}, set()).components["respiration"], 2)
+
+    def test_respiration_from_sf_surrogate(self):
+        r = scores.sofa({"spo2": 90}, set())  # S/F 429 on room air -> P/F-equivalent ~434
+        self.assertEqual(r.components["respiration"], 0)
+        r = scores.sofa({"spo2": 92, "o2_supplemental": True, "o2_flow": 4}, set())  # FiO2 ~37%
+        self.assertEqual(r.components["respiration"], 2)
+        self.assertIn("respiration from S/F surrogate", r.flags)
+
+    def test_unknown_fio2_is_missing(self):
+        self.assertIn("respiration", scores.sofa({"spo2": 95, "o2_supplemental": True}, set()).missing)
+
+
+class CharlsonTest(unittest.TestCase):
+    def test_weights_and_hierarchy(self):
+        r = scores.charlson({"cci_chf", "cci_dm", "cci_dm_complicated", "cci_malignancy", "cci_metastatic"})
+        self.assertEqual(r.components, {"cci_chf": 2, "cci_dm_complicated": 1, "cci_metastatic": 6})
+        self.assertEqual(r.total, 9)
+
+
+class Crs2Test(unittest.TestCase):
+    def test_no_vital_or_sofa_double_counting(self):
+        v = {**NORMAL, "rr": 30, "sbp": 80, "creatinine": 4.0, "plt": 30, "bilirubin": 8}
+        self.assertEqual(scores.crs2(v, {"age": 40}, set(), set(), 0, Config()).total, 0)
+
+    def test_domains(self):
+        v = {"lactate": 4.5, "ph": 7.15, "k": 6.4, "glucose": 45, "hgb": 8, "inr": 3.5,
+             "troponin_hs": 80, "procalcitonin": 3, "wbc": 22}
+        r = scores.crs2(v, {"age": 70}, set(), {"opioid"}, 9, Config())
+        d = r.components
+        self.assertEqual((d["metabolic"], d["electrolyte_glucose"], d["hematologic"], d["cardiac"],
+                          d["infection"], d["comorbidity_charlson"], d["medication"], d["frailty_age"]),
+                         (6, 4, 4, 3, 4, 6, 1.0, 1))
+
 
 
 if __name__ == "__main__":

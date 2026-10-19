@@ -23,16 +23,8 @@ def vitals(pid, t, **over):
 class RegistryTest(unittest.TestCase):
     def test_icd10_prefix_matching_ignores_dots(self):
         ids = {f.id for f in registry.factors_for_icd10("I50.22")}
-        self.assertEqual(ids, {"chf"})
-        ids = {f.id for f in registry.factors_for_icd10("O44.13")}
-        self.assertEqual(ids, {"pregnancy", "ob_previa_abruption"})
-
-    def test_slide_pooled_odds_ratios(self):
-        expected = {"ob_previa_abruption": 2.74, "ob_uterine_rupture": 2.35, "ob_prior_pph": 2.25,
-                    "ob_multiple_gestation": 2.16, "ob_prolonged_labor": 1.76}
-        for fid, or_ in expected.items():
-            self.assertEqual(registry.ALL[fid].odds_ratio, or_)
-            self.assertEqual(registry.ALL[fid].status, "pooled_or")
+        self.assertEqual(ids, {"chf", "cci_chf"})
+        self.assertEqual({f.id for f in registry.factors_for_icd10("J44.1")}, {"copd", "cci_pulmonary"})
 
     def test_medication_classes(self):
         self.assertEqual([f.id for f in registry.medication_classes("Apixaban 5 MG Oral Tablet")], ["anticoagulant"])
@@ -59,6 +51,14 @@ class EngineTest(unittest.TestCase):
         ids = {s["id"] for s in snap["trajectory"]["signals"]}
         self.assertIn("hgb_drop", ids)
         self.assertGreater(snap["uri"], snap["uri_static"])
+
+    def test_floor_keeps_news2_tier(self):
+        e = Engine()
+        snap = e.ingest_many(vitals("p", T0, rr=26, hr=125, sbp=95))["p"]  # NEWS2 3+2+2 = 7
+        self.assertEqual(snap["scores"]["news2"]["total"], 7)
+        self.assertLess(snap["uri_static"], 61)
+        self.assertEqual(snap["band"], "HIGH")
+        self.assertIn("NEWS2 >= 7", snap["floor"]["reason"])
 
     def test_index_never_below_static(self):
         e = Engine()
@@ -98,17 +98,6 @@ class EngineTest(unittest.TestCase):
         from uri.events import EPOCH
         self.assertIsNone(e.ingest(Event("p", EPOCH, CONDITION, "chf")))
 
-    def test_obstetric_combined_odds(self):
-        cfg = Config(ob_baseline_pph_risk=0.05)
-        e = Engine(cfg)
-        e.ingest_many([Event("p", T0, CONDITION, "ob_previa_abruption"),
-                       Event("p", T0, CONDITION, "ob_multiple_gestation")] + vitals("p", T0))
-        ob = e.latest("p")["obstetric"]
-        self.assertTrue(ob["active"])
-        self.assertEqual(ob["combined_odds_ratio"], round(2.74 * 2.16, 2))
-        odds = 0.05 / 0.95 * 2.74 * 2.16
-        self.assertAlmostEqual(ob["estimated_pph_risk"], round(odds / (1 + odds), 3))
-
     def test_sink_receives_every_snapshot(self):
         seen = []
         e = Engine(sinks=[seen.append])
@@ -117,9 +106,32 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(len(seen), 2)
 
 
+class RiseTest(unittest.TestCase):
+    def test_first_lab_is_not_a_sofa_rise(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0))
+        snap = e.ingest_many([Event("p", T0 + H, MEASUREMENT, "creatinine", 3.8),
+                              Event("p", T0 + H, MEASUREMENT, "plt", 40)])["p"]
+        self.assertGreaterEqual(snap["scores"]["sofa"]["total"], 6)
+        self.assertNotIn("sofa_rise", {s["id"] for s in snap["trajectory"]["signals"]})
+
+    def test_repeat_lab_worsening_is_a_sofa_rise(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [Event("p", T0, MEASUREMENT, "plt", 180),
+                                         Event("p", T0, MEASUREMENT, "creatinine", 1.0)])
+        snap = e.ingest_many([Event("p", T0 + 6 * H, MEASUREMENT, "plt", 90),
+                              Event("p", T0 + 6 * H, MEASUREMENT, "creatinine", 2.2)])["p"]
+        self.assertIn("sofa_rise", {s["id"] for s in snap["trajectory"]["signals"]})
+
+    def test_rox_low_on_high_flow(self):
+        e = Engine()
+        snap = e.ingest_many(vitals("p", T0, spo2=88, rr=34) + [Event("p", T0, MEASUREMENT, "fio2", 70)])["p"]
+        self.assertIn("rox_low", {s["id"] for s in snap["trajectory"]["signals"]})
+
+
 class FhirTest(unittest.TestCase):
     def setUp(self):
-        self.a = FhirAdapter(simulate.LOCAL_CODES)
+        self.a = FhirAdapter()
 
     def test_bp_panel_and_units(self):
         bp = simulate._bp("p", T0, 90, 50, 1)
@@ -131,8 +143,8 @@ class FhirTest(unittest.TestCase):
 
     def test_o2_flow_means_supplemental(self):
         obs = simulate._obs("p", T0, "3151-8", 2, 4)
-        e = self.a.events(obs)[0]
-        self.assertEqual((e.code, e.value), ("o2_supplemental", True))
+        self.assertEqual({(e.code, e.value) for e in self.a.events(obs)},
+                         {("o2_flow", 2.0), ("o2_supplemental", True)})
 
     def test_entered_in_error_skipped(self):
         obs = {**simulate._obs("p", T0, "8867-4", 80, 5), "status": "entered-in-error"}
@@ -141,28 +153,29 @@ class FhirTest(unittest.TestCase):
     def test_resolved_condition_inactive(self):
         c = simulate._condition("p", "I50.9", 1)
         c["clinicalStatus"] = {"coding": [{"code": "resolved"}]}
-        (e,) = self.a.events(c)
-        self.assertEqual((e.code, e.active), ("chf", False))
+        events = self.a.events(c)
+        self.assertEqual({(e.code, e.active) for e in events}, {("chf", False), ("cci_chf", False)})
 
     def test_medication_request(self):
         m = {"resourceType": "MedicationRequest", "id": "m1", "status": "active",
              "subject": {"reference": "Patient/p"}, "authoredOn": T0.isoformat(),
              "medicationCodeableConcept": {"text": "insulin glargine 100 unit/mL"}}
-        (e,) = self.a.events(m)
-        self.assertEqual((e.kind, e.code, e.active), ("medication", "insulin", True))
+        events = self.a.events(m)
+        self.assertEqual({(e.kind, e.code, e.active) for e in events},
+                         {("medication", "insulin", True), ("medication", "rx:insulin", True)})
 
     def test_bundle_and_unknown_resources(self):
         bundle = {"resourceType": "Bundle", "entry": [
             {"resource": simulate._obs("p", T0, "8867-4", 80, 1)},
-            {"resource": {"resourceType": "Encounter", "id": "e"}}]}
+            {"resource": {"resourceType": "Appointment", "id": "e"}}]}
         self.assertEqual(len(self.a.events(bundle)), 1)
-        self.assertEqual(self.a.skipped["resource:Encounter"], 1)
+        self.assertEqual(self.a.skipped["resource:Appointment"], 1)
 
 
 class ScenarioTest(unittest.TestCase):
-    def run_scenario(self, name):
-        a = FhirAdapter(simulate.LOCAL_CODES)
-        e = Engine()
+    def run_scenario(self, name, cfg=None):
+        a = FhirAdapter()
+        e = Engine(cfg)
         for r in simulate.stream([name]):
             e.ingest_many(a.events(r))
         return e.latest(f"sim-{name}")
@@ -172,11 +185,17 @@ class ScenarioTest(unittest.TestCase):
         self.assertEqual(snap["band"], "CRITICAL")
         self.assertIn("Sepsis / undifferentiated infection", {c["cause"] for c in snap["correctable_causes"]})
 
-    def test_pph_is_flagged_and_trend_driven(self):
-        snap = self.run_scenario("pph")
-        self.assertEqual(snap["correctable_causes"][0]["cause"], "Postpartum hemorrhage")
+    def test_sepsis_shows_new_organ_dysfunction(self):
+        snap = self.run_scenario("sepsis")
+        self.assertIn("sofa_rise", {s["id"] for s in snap["trajectory"]["signals"]})
+        self.assertGreaterEqual(snap["scores"]["sofa"]["rise_48h"], 2)
+
+    def test_gi_bleed_caught_by_trend_without_sepsis_cause(self):
+        snap = self.run_scenario("gi_bleed")
+        causes = {c["cause"] for c in snap["correctable_causes"]}
+        self.assertIn("GI bleed / hemorrhagic shock", causes)
+        self.assertNotIn("Sepsis / undifferentiated infection", causes)
         self.assertGreater(snap["uri"], snap["uri_static"])
-        self.assertIn(snap["band"], ("HIGH", "CRITICAL"))
 
     def test_stable_stays_low(self):
         snap = self.run_scenario("stable")

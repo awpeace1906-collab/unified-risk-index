@@ -1,4 +1,5 @@
-"""FHIR R4 adapter: Observation / Condition / Medication* / Patient -> Events.
+"""FHIR R4 adapter: Observation / Condition / Medication* / Patient /
+Procedure / Encounter / Consent -> Events.
 
 Works on single resources, Bundles (transaction, collection, searchset,
 history, subscription-notification) and NDJSON bulk-export lines. Unknown
@@ -12,7 +13,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from . import registry
-from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, Event, parse_time
+from .events import CONDITION, CONTEXT, CONTEXT_KEYS, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, parse_time
 
 LOINC = "http://loinc.org"
 
@@ -30,7 +31,7 @@ LOINC_MAP: dict[str, str] = {
     "2075-0": "cl", "33037-3": "anion_gap", "1863-0": "anion_gap", "2345-7": "glucose", "2339-0": "glucose",
     "33959-8": "procalcitonin", "1988-5": "crp", "6301-6": "inr", "34714-6": "inr", "3255-7": "fibrinogen",
     "3040-3": "lipase", "1975-2": "bilirubin", "1742-6": "alt", "1920-8": "ast", "16362-6": "ammonia",
-    "19123-9": "mg", "2601-3": "mg", "2777-1": "phos", "2143-6": "cortisol", "3016-3": "tsh",
+    "19123-9": "mg", "2601-3": "mg", "2777-1": "phos", "2143-6": "cortisol", "3016-3": "tsh", "4548-4": "hba1c",
 }
 BP_PANEL = "85354-9"
 
@@ -44,6 +45,23 @@ _FACTORS = {
     ("fibrinogen", "g/l"): 100,
     ("bun", "mmol/l"): 2.8,
 }
+
+SNOMED = "http://snomed.info/sct"
+CPT = "http://www.ama-assn.org/go/cpt"
+INTUBATION_CODES = {(SNOMED, "112798008"), (CPT, "31500")}  # endotracheal intubation
+SURGICAL_CATEGORY = (SNOMED, "387713003")                  # surgical procedure
+INPATIENT_CLASSES = {"IMP", "ACUTE", "NONAC"}
+DEFAULT_ICU_PATTERNS = ("icu", "intensive care", "critical care", "micu", "sicu", "ccu", "cvicu", "neuro icu")
+PRESSOR_START = ("norepinephrine", "epinephrine", "vasopressin", "phenylephrine", "dopamine", "angiotensin ii")
+
+# O2 device / ventilation mode text -> resp_support level
+_SUPPORT_WORDS = [
+    (4, ("ventilator", "mechanical", "endotracheal", "intubated", "tracheostomy vent", "ett")),
+    (3, ("bipap", "cpap", "niv", "non-invasive", "noninvasive")),
+    (2, ("high flow", "high-flow", "hfnc", "optiflow")),
+    (1, ("nasal cannula", "mask", "non-rebreather", "nonrebreather", "venturi", "blow-by", "low flow")),
+    (0, ("room air", "none")),
+]
 
 _ACTIVE = {"active", "recurrence", "relapse", "in-progress", "on-hold", "intended"}
 _SKIP_OBS = {"entered-in-error", "cancelled", "registered"}
@@ -73,10 +91,39 @@ def _convert(param: str, value: float, unit: str) -> float:
     return value * _FACTORS.get((param, u), 1)
 
 
+def support_level(text) -> float | None:
+    if isinstance(text, (int, float)):
+        return float(text)
+    t = str(text or "").lower()
+    for level, words in _SUPPORT_WORDS:
+        if any(w in t for w in words):
+            return float(level)
+    return None
+
+
+def _codings(codeable: dict) -> set[tuple[str, str]]:
+    return {(c.get("system"), c.get("code")) for c in (codeable or {}).get("coding", [])}
+
+
+def _dose_mg(r: dict) -> float | None:
+    q = None
+    if r["resourceType"] == "MedicationAdministration":
+        q = (r.get("dosage") or {}).get("dose")
+    else:
+        di = (r.get("dosageInstruction") or r.get("dosage") or [{}])[0]
+        q = ((di.get("doseAndRate") or [{}])[0]).get("doseQuantity")
+    if not q or q.get("value") is None:
+        return None
+    unit = (q.get("code") or q.get("unit") or "").lower()
+    return float(q["value"]) if unit == "mg" else None
+
+
 class FhirAdapter:
-    def __init__(self, local_codes: dict | None = None, now: datetime | None = None):
+    def __init__(self, local_codes: dict | None = None, now: datetime | None = None,
+                 icu_patterns: tuple[str, ...] = DEFAULT_ICU_PATTERNS):
         self.local_codes = local_codes or {}
         self.now = now
+        self.icu_patterns = tuple(p.lower() for p in icu_patterns)
         self.skipped = Counter()
 
     # -- entry points --------------------------------------------------------
@@ -95,6 +142,9 @@ class FhirAdapter:
             "MedicationStatement": self._medication,
             "MedicationAdministration": self._medication,
             "Patient": self._patient,
+            "Procedure": self._procedure,
+            "Encounter": self._encounter,
+            "Consent": self._consent,
         }.get(payload.get("resourceType"))
         if handler is None:
             self.skipped[f"resource:{payload.get('resourceType')}"] += 1
@@ -154,8 +204,19 @@ class FhirAdapter:
                 next((c.get("code") for c in cc.get("coding", [])), None)
         else:
             return []
+        if param in CONTEXT_KEYS:  # e.g. a Clinical Frailty Scale flowsheet row
+            return [Event(pid, t, CONTEXT, param, value, source=src)]
+        if param.startswith("outcome:"):  # e.g. a local RRT-activation flowsheet row
+            return [Event(pid, t, OUTCOME, param.split(":", 1)[1], value, source=src)]
+        if param == "resp_support":
+            level = support_level(value)
+            if level is None:
+                return []
+            return [Event(pid, t, MEASUREMENT, "resp_support", level, source=src),
+                    Event(pid, t, MEASUREMENT, "o2_supplemental", level >= 1, source=src)]
         if param == "o2_flow":  # any O2 flow means supplemental oxygen
-            return [Event(pid, t, MEASUREMENT, "o2_supplemental", float(value) > 0, source=src)]
+            return [Event(pid, t, MEASUREMENT, "o2_flow", float(value), source=src),
+                    Event(pid, t, MEASUREMENT, "o2_supplemental", float(value) > 0, source=src)]
         return [Event(pid, t, MEASUREMENT, param, value, source=src)]
 
     def _condition(self, r: dict) -> list[Event]:
@@ -187,17 +248,93 @@ class FhirAdapter:
         live = _ACTIVE | {"completed"} if r["resourceType"] == "MedicationAdministration" else _ACTIVE
         active = r.get("status", "active") in live
         classes = registry.medication_classes(text)
+        src = f"{r['resourceType']}/{r.get('id', '')}"
+        out = [Event(pid, t, MEDICATION, f.id, text.strip(), active=active, source=src) for f in classes]
         if not classes:
             self.skipped["medication:unmapped"] += 1
-        return [Event(pid, t, MEDICATION, f.id, text.strip(), active=active,
-                      source=f"{r['resourceType']}/{r.get('id', '')}") for f in classes]
+        # Every medication, mapped or not, counts toward polypharmacy.
+        # Keyed by the first word (the ingredient, usually) so a dose change
+        # does not count as a second medication.
+        words = text.lower().split()
+        key = words[0] if words else ""
+        if key:
+            out.append(Event(pid, t, MEDICATION, f"rx:{key}", text.strip(), active=active, source=src))
+        lower = text.lower()
+        dose = _dose_mg(r)
+        for drug, factor in registry.LOOP_DIURETIC_FUROSEMIDE_EQ.items():
+            if drug in lower and dose is not None and dose * factor >= 80:
+                out.append(Event(pid, t, CONDITION, "high_dose_diuretic", f"{dose:g} mg {drug}",
+                                 active=active, source=src))
+        if r["resourceType"] == "MedicationAdministration" and active and t > EPOCH \
+                and any(p in lower for p in PRESSOR_START):
+            out.append(Event(pid, t, OUTCOME, "vasopressor_start", text.strip(), source=src))
+        return out
 
     def _patient(self, r: dict) -> list[Event]:
         pid = r.get("id")
-        if not pid or not r.get("birthDate"):
+        if not pid:
             return []
-        born = parse_time(r["birthDate"])
-        ref = self.now or datetime.now(timezone.utc)
-        age = ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
-        # Demographics should not move the patient's clock forward.
-        return [Event(pid, EPOCH, CONTEXT, "age", age, source=f"Patient/{pid}")]
+        src = f"Patient/{pid}"
+        out = []
+        if r.get("birthDate"):
+            born = parse_time(r["birthDate"])
+            ref = self.now or datetime.now(timezone.utc)
+            age = ref.year - born.year - ((ref.month, ref.day) < (born.month, born.day))
+            # Demographics should not move the patient's clock forward.
+            out.append(Event(pid, EPOCH, CONTEXT, "age", age, source=src))
+        interpreter = any(x.get("url", "").endswith("patient-interpreterRequired") and x.get("valueBoolean")
+                          for x in r.get("extension", []))
+        comms = r.get("communication", [])
+        preferred = [c for c in comms if c.get("preferred")] or comms[:1]
+        non_english = any(not (code or "").lower().startswith("en")
+                          for c in preferred for _, code in _codings(c.get("language")) if code)
+        if interpreter or non_english:
+            out.append(Event(pid, EPOCH, CONDITION, "language_barrier", True, source=src))
+        if r.get("deceasedDateTime"):
+            out.append(Event(pid, parse_time(r["deceasedDateTime"]), OUTCOME, "death", True, source=src))
+        return out
+
+    def _procedure(self, r: dict) -> list[Event]:
+        pid = _patient_ref(r)
+        t = _time(r, "performedDateTime", "performedPeriod")
+        if not pid or not t or r.get("status") in ("entered-in-error", "not-done", "preparation"):
+            return []
+        src = f"Procedure/{r.get('id', '')}"
+        codes = _codings(r.get("code"))
+        out = []
+        if codes & INTUBATION_CODES:
+            out.append(Event(pid, t, OUTCOME, "intubation", True, source=src))
+        if SURGICAL_CATEGORY in _codings(r.get("category")):
+            out.append(Event(pid, EPOCH, CONTEXT, "last_surgery", t.isoformat(), source=src))
+        mapped = self._param(r.get("code", {}))
+        if mapped and mapped.startswith("outcome:"):
+            out.append(Event(pid, t, OUTCOME, mapped.split(":", 1)[1], True, source=src))
+        if not out:
+            self.skipped["procedure:unmapped"] += 1
+        return out
+
+    def _encounter(self, r: dict) -> list[Event]:
+        pid = _patient_ref(r)
+        if not pid:
+            return []
+        src = f"Encounter/{r.get('id', '')}"
+        out = []
+        cls = (r.get("class") or {}).get("code")
+        end = (r.get("period") or {}).get("end")
+        if cls in INPATIENT_CLASSES and r.get("status") == "finished" and end:
+            out.append(Event(pid, EPOCH, CONTEXT, "last_inpatient_discharge", parse_time(end).isoformat(),
+                             source=src))
+        for loc in r.get("location", []):
+            name = ((loc.get("location") or {}).get("display") or "").lower()
+            start = (loc.get("period") or {}).get("start") or (r.get("period") or {}).get("start")
+            if start and any(p in name for p in self.icu_patterns):
+                out.append(Event(pid, parse_time(start), OUTCOME, "icu_transfer", name, source=src))
+        return out
+
+    def _consent(self, r: dict) -> list[Event]:
+        pid = _patient_ref(r)
+        cats = {code for c in r.get("category", []) for _, code in _codings(c)}
+        if not pid or not cats & {"acd", "42348-3"}:
+            return []
+        return [Event(pid, EPOCH, CONDITION, "advance_directive", True, active=r.get("status") == "active",
+                      source=f"Consent/{r.get('id', '')}")]

@@ -1,11 +1,28 @@
 # Unified Risk Index (URI) v2: streaming
 
-URI v1 is a one-time triage score: NEWS2, qSOFA, MEWS and a Composite Risk
-Score, combined into a 0–100 index with 6–48 h risk windows and a
-correctable-cause panel. **v2 recalculates the index every time the EMR sends
-a new value** and adds a trajectory layer that scores how the patient is
-changing (a falling hemoglobin, a lactate that is not clearing, a NEWS2 that
-keeps rising), not just where they are now.
+Decompensation prediction for adult emergency department and critical-care
+patients, built on the risk factors defined in URI v1. URI v1 is a one-time
+triage score. **v2 recalculates every time the EMR sends a value**, scores
+how the patient is changing, captures the study's composite outcome from the
+same stream, and can be calibrated to real 6–48 h probabilities.
+
+* **Index:** NEWS2 (physiology) + SOFA (organ dysfunction) + CRS2 (biomarkers,
+  Charlson comorbidity, medications, frailty). One channel per kind of
+  information, so no vital sign is counted twice.
+* **Trajectory layer:** NEWS2/SOFA rises, shock index, Hgb drop, lactate
+  clearance, KDIGO AKI, troponin delta, oxygenation, ROX.
+* **Full v1 coverage:** all 60 history items, 28 medication classes and 33 numeric labs
+  are detected from the EMR. Items with no diagnosis code are derived from
+  Procedure, Encounter, medication and Consent data, plus the Padua score.
+* **Critical care:** respiratory-support ladder, vasopressor count, 21
+  correctable causes, and the v1 critical-value panel.
+* **Outcome capture:** ICU transfer, intubation, vasopressor start, death and
+  RRT, taken from the stream and kept out of the predictors.
+* **Escalation floor:** the URI is never less urgent than the NEWS2 / Sepsis-3
+  tier the patient already meets.
+* **Calibration:** `python -m uri.calibrate` fits per-horizon probabilities
+  and reports optimism-corrected AUROC against NEWS2 alone and against URI v1.
+* `uri_v1` (the original formula) is reported in every snapshot for comparison.
 
 > Research software for shadow-mode validation. It is not a medical device
 > and must not drive clinical decisions until validated (see the URI research
@@ -13,25 +30,25 @@ keeps rising), not just where they are now.
 
 ## Quick start
 
-No dependencies; Python ≥ 3.10.
+The engine needs no dependencies; Python ≥ 3.10. Calibration needs numpy.
 
 ```bash
-python -m uri demo                       # three synthetic patients streamed through the engine
+python -m uri demo                       # sepsis, occult GI bleed, hypercapnic resp. failure, stable
 python -m uri simulate > feed.ndjson     # write the synthetic FHIR feed
-python -m uri replay feed.ndjson --log snapshots.jsonl
+python -m uri replay feed.ndjson --log snapshots.jsonl --outcomes-out outcomes.csv
 python -m uri serve --port 8080 --log shadow.jsonl   # receive FHIR pushes
+python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv --bootstrap 200 --out model.json
 python -m unittest discover -s tests -t .
 ```
 
-Demo output (abridged): the septic patient climbs from LOW to CRITICAL. The
-postpartum patient (previa and twins) reaches HIGH while the v1 formula alone
-still reads MODERATE, because the extra risk comes from the trend in blood
-loss, hemoglobin and shock index:
+Demo output (abridged). In the occult GI bleed, the trend lifts the index
+while v1 still reads LOW, and the NEWS2 floor takes it to HIGH once vitals
+cross RCP's emergency tier:
 
 ```
-08:00  sim-pph   URI   3.2 (LOW)          v1  3.2 +traj  0.0
-09:00  sim-pph   URI  22.9 (LOW-MODERATE) v1  8.9 +traj 14.0  signals: news2_rise, shock_index, hgb_drop, qbl_ge_500  causes: Postpartum hemorrhage …
-09:30  sim-pph   URI  62.2 (HIGH)         v1 42.2 +traj 20.0  signals: … qbl_ge_1000  [band_escalation] [rapid_rise]
+08:00  sim-gi_bleed URI   4.8 (LOW)          static  4.8 +traj  0.0 | v1  5.0
+14:00  sim-gi_bleed URI  26.9 (LOW-MODERATE) static 14.9 +traj 12.0 | v1 14.1  signals: news2_rise, shock_index, hgb_drop  causes: GI bleed / hemorrhagic shock
+16:00  sim-gi_bleed URI  61.0 (HIGH)         static 25.9 +traj 18.0 | v1 46.1
 ```
 
 ## What streams in
@@ -39,23 +56,29 @@ loss, hemoglobin and shock index:
 | FHIR resource | Used for |
 |---|---|
 | `Observation` (LOINC) | vitals (incl. BP panel, O₂ flow/FiO₂, GCS), ~40 labs, unit-converted |
-| `Condition` (ICD-10-CM) | ~65 risk factors, from the v1 PMHx panel and the obstetric hemorrhage factors |
+| `Condition` (ICD-10-CM) | Charlson categories (Quan coding) and the ~50 v1 PMHx factors |
 | `MedicationRequest` / `Statement` / `Administration` | 19 high-risk medication classes |
-| `Patient` | age |
-| local flowsheet codes | anything else (QBL, CFS, …), mapped via `local_codes` in the config |
+| `Patient` | age, language / interpreter need, death |
+| `Procedure` | recent surgery, intubation (outcome) |
+| `Encounter` | recent hospitalization, ICU transfer (outcome) |
+| `Consent` | advance directive |
+| local flowsheet codes | O₂ device / ventilation mode, Clinical Frailty Scale, RRT activation, … via `local_codes` |
 
 ## Each snapshot contains
 
-`uri` (streaming index) and `uri_static` (v1 formula, for comparison), band,
-component breakdown, NEWS2/qSOFA/MEWS/CRS detail, trajectory signals, 6–48 h
-windows, the ranked correctable causes with the reason each fired, the
-obstetric hemorrhage panel, active risk factors with their evidence status,
-stale and missing data, and alerts (band escalation, rapid rise, new cause).
+`uri` (streaming index), `uri_static` (no trend term) and `uri_v1`, band,
+escalation floor and its reason, NEWS2/qSOFA/MEWS/SOFA/Charlson/CRS/CRS2
+detail, Padua, trajectory signals, 6–48 h windows (fitted probabilities once
+a model is loaded), the ranked correctable causes with the reason each
+fired, critical values, active risk factors with their evidence status,
+composite outcomes observed so far, study eligibility, stale and missing
+data, and alerts.
 
 ## Docs
 
+* [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the index formula, trajectory signals, streaming behaviour, and how this fits the Phase 1–4 research plan
-* [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry (pooled ORs from the PPH meta-analysis, v1 priors, tracked factors)
+* [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry and its coverage of the v1 panels
 * [docs/EXCEL_RECONCILIATION.md](docs/EXCEL_RECONCILIATION.md): cell-reference bugs in the v1 workbook and the decisions they need
 
 ## Layout
@@ -66,10 +89,13 @@ uri/
   fhir.py       FHIR R4 -> events (LOINC, ICD-10-CM, medication text)
   registry.py   risk factors with detection codes and evidence
   series.py     time-ordered per-parameter series
-  scores.py     NEWS2, qSOFA, MEWS, CRS, URI composite, windows
+  scores.py     NEWS2, qSOFA, MEWS, SOFA, Charlson, CRS, CRS2, floor, composite
   trends.py     trajectory signals
-  causes.py     correctable-cause rules
+  causes.py     correctable-cause rules (21)
+  labs.py       v1 critical / flag thresholds
   engine.py     per-patient state, recompute, alerts, sinks
+  model.py      feature definition + fitted-model scoring
+  calibrate.py  per-horizon logistic fit, bootstrap validation (numpy)
   server.py     HTTP receiver (stdlib)
   simulate.py   synthetic FHIR scenarios
   config.py     every weight / threshold, JSON-overridable

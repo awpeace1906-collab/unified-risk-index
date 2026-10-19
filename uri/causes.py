@@ -1,8 +1,7 @@
 """Correctable-cause panel.
 
 The 15 causes, actions and time sensitivities are carried over verbatim from
-the v1 Risk Dashboard; v2 adds postpartum hemorrhage and makes every trigger
-an explicit rule over streamed data, with the reason it fired. Rules fire only
+the v1 Risk Dashboard; v2 makes every trigger an explicit rule over streamed data, with the reason it fired. Rules fire only
 on data that is present: a missing lab never triggers a cause.
 """
 
@@ -30,7 +29,7 @@ class Facts:
     meds: set
     signals: set
     qsofa: float
-    ob_active: bool
+    lipase_uln: float = 60.0
 
     def has(self, key) -> bool:
         return self.v.get(key) is not None
@@ -55,12 +54,17 @@ def _volume(f: Facts):
 
 
 def _sepsis(f: Facts):
+    # qSOFA is a severity screen, not an infection marker: on its own it also
+    # fires for hemorrhage, PE or heart failure. Require evidence of infection.
     t = f.v.get("temp_c")
-    sirs_temp = t is not None and (t > 38.3 or t < 36)
-    sirs_wbc = f.gt("wbc", 12) or f.lt("wbc", 4)
-    return _why((f.qsofa >= 2, "qSOFA >= 2"),
-                (f.gt("procalcitonin", 0.49), "procalcitonin >= 0.5"),
-                (sirs_temp and sirs_wbc, "abnormal temperature and WBC"))
+    fever = t is not None and (t > 38.3 or t < 36)
+    wbc = f.gt("wbc", 12) or f.lt("wbc", 4)
+    pct = f.gt("procalcitonin", 0.49)
+    infection = fever or wbc or pct
+    return _why((f.qsofa >= 2 and infection, "qSOFA >= 2 with fever / WBC / procalcitonin"),
+                ("sofa_rise" in f.signals and infection, "new organ dysfunction (SOFA +2) with infection markers"),
+                (pct and f.gt("procalcitonin", 1.99), "procalcitonin >= 2"),
+                (fever and wbc, "abnormal temperature and WBC"))
 
 
 def _electrolyte(f: Facts):
@@ -87,7 +91,10 @@ def _resp(f: Facts):
 
 
 def _acidosis(f: Facts):
-    return _why((f.lt("ph", 7.30), f"pH {f.v.get('ph')}"), (f.lt("hco3", 18), f"HCO3 {f.v.get('hco3')}"))
+    # A low pH with a high pCO2 is respiratory acidosis (see hypercapnia rule).
+    metabolic_ph = f.lt("ph", 7.30) and not f.gt("pco2", 45)
+    return _why((metabolic_ph, f"pH {f.v.get('ph')} without hypercapnia"),
+                (f.lt("hco3", 18), f"HCO3 {f.v.get('hco3')}"))
 
 
 def _pe(f: Facts):
@@ -112,7 +119,8 @@ def _opioid(f: Facts):
 def _adrenal(f: Facts):
     steroid = "steroid_dependent" in f.factors or "adrenal_insufficiency" in f.factors or "corticosteroid" in f.meds
     return _why((steroid and f.lt("sbp", 90), "hypotension in steroid-dependent patient"),
-                (f.lt("na", 130) and f.gt("k", 5.5) and f.lt("sbp", 90), "hypoNa + hyperK + hypotension"))
+                (f.lt("na", 130) and f.gt("k", 5.5) and f.lt("sbp", 90), "hypoNa + hyperK + hypotension"),
+                (f.lt("cortisol", 15) and f.lt("sbp", 90), f"random cortisol {f.v.get('cortisol')} with hypotension"))
 
 
 def _dka(f: Facts):
@@ -124,18 +132,45 @@ def _dka(f: Facts):
 def _gi_bleed(f: Facts):
     unstable = f.gt("hr", 100) or f.lt("sbp", 90)
     context = "gi_bleed" in f.factors or "anticoagulant" in f.meds
-    return _why(("hgb_drop" in f.signals and (unstable or context), "falling Hgb with instability / bleeding risk"),
+    bun_cr = f.v["bun"] / f.v["creatinine"] if f.has("bun") and f.v.get("creatinine") else None
+    return _why(("hgb_drop" in f.signals and (unstable or context), "falling Hgb with instability / bleeding risk"
+                 + (f"; BUN/Cr {bun_cr:.0f} suggests upper GI source" if bun_cr and bun_cr > 30 else "")),
                 (f.lt("hgb", 8) and unstable and context, "Hgb < 8 with instability"))
 
 
-def _pph(f: Facts):
-    if not f.ob_active:
-        return None
-    si = shock_index(f.v)
-    return _why(("qbl_ge_1000" in f.signals, "QBL >= 1000 mL"),
-                ("hgb_drop" in f.signals, "falling Hgb"),
-                (si is not None and si >= 0.9, f"shock index {si:.2f}" if si is not None else ""),
-                ("fibrinogen_low" in f.signals, "fibrinogen < 200"))
+def _hypercapnia(f: Facts):
+    return _why((f.gt("pco2", 50) and f.lt("ph", 7.35), f"pCO2 {f.v.get('pco2')} with pH {f.v.get('ph')}"),
+                (f.gt("etco2", 50), f"ETCO2 {f.v.get('etco2')}"))
+
+
+def _hepatic(f: Facts):
+    return _why((f.gt("ammonia", 100), f"ammonia {f.v.get('ammonia')}"),
+                (bool({"cirrhosis", "cci_liver_mild", "cci_liver_severe"} & f.factors) and f.lt("gcs", 15)
+                 and f.gt("ammonia", 50), "cirrhosis with altered mentation and raised ammonia"),
+                (f.gt("bilirubin", 5) and f.gt("inr", 1.5) and f.lt("gcs", 15),
+                 "bilirubin > 5 + INR > 1.5 + encephalopathy (acute liver failure pattern)"))
+
+
+def _thyroid(f: Facts):
+    t = f.v.get("temp_c")
+    storm = f.lt("tsh", 0.1) and (f.gt("hr", 130) or (t is not None and t > 38.5) or f.lt("gcs", 15))
+    myxedema = f.gt("tsh", 10) and ((t is not None and t < 35.5) or f.lt("hr", 50) or f.lt("gcs", 15))
+    return _why((storm, "TSH < 0.1 with tachycardia / fever / altered mentation (thyroid storm)"),
+                (myxedema, "TSH > 10 with hypothermia / bradycardia / altered mentation (myxedema)"))
+
+
+def _mg_phos(f: Facts):
+    return _why((f.lt("mg", 1.2), f"Mg {f.v.get('mg')} mg/dL"), (f.lt("phos", 1.5), f"phosphorus {f.v.get('phos')}"))
+
+
+def _pancreatitis(f: Facts):
+    return _why((f.gt("lipase", 3 * f.lipase_uln), f"lipase {f.v.get('lipase')} (> 3x ULN)"))
+
+
+def _coagulopathy(f: Facts):
+    severe = f.gt("inr", 3.0) or f.lt("fibrinogen", 150) or f.lt("plt", 50)
+    bleeding = "hgb_drop" in f.signals or "gi_bleed" in f.factors or "anticoagulant" in f.meds
+    return _why((severe and bleeding, "INR > 3 / fibrinogen < 150 / platelets < 50 with bleeding or anticoagulation"))
 
 
 CAUSES: list[Cause] = [
@@ -183,11 +218,26 @@ CAUSES: list[Cause] = [
     Cause(15, "GI bleed / hemorrhagic shock",
           "2 large-bore IVs, type & crossmatch, pRBC transfusion (target Hgb > 7), GI/IR consult; hold anticoagulants",
           "0-1 hour", _gi_bleed),
-    # Only fires for obstetric patients, where it outranks the general list.
-    Cause(0, "Postpartum hemorrhage",
-          "Activate obstetric hemorrhage protocol; assess the 4 Ts (tone, trauma, tissue, thrombin); uterotonics; "
-          "TXA 1 g IV within 3 h of birth; massive transfusion protocol; replace fibrinogen if < 200 mg/dL",
-          "0-30 min", _pph),
+    Cause(16, "Hypercapnic respiratory failure",
+          "BiPAP trial with repeat gas in 1 h; treat cause (COPD, sedatives, neuromuscular, OHS); "
+          "low threshold for intubation if pH falling or mentation worsening", "0-1 hour", _hypercapnia),
+    Cause(17, "Hepatic encephalopathy / acute liver failure",
+          "Lactulose (+ rifaximin); search for precipitant (GI bleed, infection, electrolytes, sedatives); "
+          "acute liver failure -> N-acetylcysteine if indicated and transplant-center referral", "0-2 hours", _hepatic),
+    Cause(18, "Thyroid storm / myxedema coma",
+          "Storm: beta-blocker, PTU or methimazole, then iodine, hydrocortisone, cooling. "
+          "Myxedema: IV levothyroxine + hydrocortisone, passive rewarming, airway support", "0-1 hour", _thyroid),
+    Cause(19, "Severe hypomagnesemia / hypophosphatemia",
+          "IV magnesium sulfate (replete Mg before K); IV phosphate if < 1.0 or symptomatic; cardiac monitoring",
+          "0-2 hours", _mg_phos),
+    Cause(20, "Acute pancreatitis",
+          "Goal-directed LR resuscitation, analgesia, assess severity (BISAP / SIRS), RUQ ultrasound for gallstones",
+          "0-2 hours", _pancreatitis),
+    Cause(21, "Coagulopathy with bleeding risk",
+          "Reverse anticoagulant (PCC + vitamin K for warfarin; andexanet or PCC for Xa inhibitors; idarucizumab for "
+          "dabigatran); cryoprecipitate if fibrinogen < 150; platelets if < 50 and bleeding", "0-1 hour", _coagulopathy),
+
+
 ]
 
 

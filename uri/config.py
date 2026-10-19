@@ -15,7 +15,19 @@ from datetime import timedelta
 
 @dataclass
 class Config:
-    # --- URI v1 composite -------------------------------------------------
+    # --- URI v2 composite (the streamed index) -----------------------------
+    # One score per independent information channel, so no input is counted
+    # twice: NEWS2 = bedside physiology, SOFA = organ dysfunction (labs + MAP
+    # + GCS), CRS2 = biomarkers SOFA lacks + Charlson + medications + frailty.
+    # These are priors; a fitted model (model_path) replaces them for the
+    # risk windows.
+    weights_v2: dict = field(default_factory=lambda: {"news2": 0.45, "sofa": 0.30, "crs2": 0.25})
+
+    # Logistic model produced by `python -m uri.calibrate`. When set, the time
+    # windows report fitted probabilities instead of v1 multipliers.
+    model_path: str | None = None
+
+    # --- URI v1 composite (computed alongside for comparison) ---------------
     include_mews: bool = True
     # AUROC-proportional weights (manuscript). Used when include_mews is True.
     weights_with_mews: dict = field(default_factory=lambda: {
@@ -23,8 +35,11 @@ class Config:
     # Redistributed weights when MEWS is toggled off.
     weights_without_mews: dict = field(default_factory=lambda: {
         "news2": 0.50, "qsofa": 0.30, "crs": 0.20})
+    # Normalization maxima. SOFA saturates at 15 (theoretical max 24): beyond
+    # ~15 mortality is already very high and the extra points add nothing
+    # actionable. CRS2's achievable max is 36.5 but it saturates at 30.
     score_max: dict = field(default_factory=lambda: {
-        "news2": 20, "qsofa": 3, "mews": 14, "crs": 30})
+        "news2": 20, "qsofa": 3, "mews": 14, "crs": 30, "sofa": 15, "crs2": 30})
 
     # Empiric time-window decay multipliers (v1). Not regression-derived.
     window_multipliers: dict = field(default_factory=lambda: {
@@ -52,21 +67,20 @@ class Config:
     bnp_severe_pg_ml: float = 400.0
     ntprobnp_severe_pg_ml: float = 1800.0
     shock_index_threshold: float = 1.0
-    obstetric_shock_index_threshold: float = 0.9
 
-    # --- Obstetric hemorrhage module ---------------------------------------
-    # CRS points per unit of summed ln(OR), and the cap for that domain.
-    ob_points_per_log_or: float = 2.0
-    ob_points_cap: float = 6.0
-    # Baseline PPH risk for the local population. Leave None until it comes
-    # from local data; the module then reports combined odds ratio only.
-    ob_baseline_pph_risk: float | None = None
+    # Location names (Encounter.location display) that count as ICU for the
+    # icu_transfer outcome.
+    icu_location_patterns: list = field(default_factory=lambda: [
+        "icu", "intensive care", "critical care", "micu", "sicu", "ccu", "cvicu"])
+    # Upper limit of normal for lipase (assay-specific), for the 3x ULN rule.
+    lipase_uln_u_l: float = 60.0
 
     # Extra code -> parameter mappings for local flowsheet rows, e.g.
-    # {"urn:oid:1.2.3|QBL": "qbl_ml", "urn:local|CFS": "cfs"}
+    # {"urn:oid:1.2.3|CFS": "cfs", "urn:oid:1.2.3|O2DEV": "resp_support",
+    #  "urn:oid:1.2.3|RRT": "outcome:rrt"}
     local_codes: dict = field(default_factory=dict)
 
-    def weights(self) -> dict:
+    def weights_v1(self) -> dict:
         return dict(self.weights_with_mews if self.include_mews else self.weights_without_mews)
 
     def usable(self, category: str) -> timedelta:
