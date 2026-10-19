@@ -13,6 +13,11 @@ Evidence status values:
   tracked    - monitored and displayed; no weight until evidence is attached
   candidate  - proposed factor; confirm against the source review before use
   validated_index - category of a published, validated index (e.g. Charlson)
+
+Detection: most factors come from ICD-10-CM prefixes on the problem list.
+Factors with ``derived`` set are computed by the engine from other data
+(procedure and encounter dates, medication counts and doses, demographics,
+the Padua score) because no diagnosis code captures them reliably.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ class RiskFactor:
     status: str = "tracked"
     source: str = ""
     notes: str = ""
+    derived: str = ""                  # how the engine derives it, if not coded
 
     @property
     def log_odds(self) -> float:
@@ -41,8 +47,6 @@ class RiskFactor:
 
 
 V1 = "URI v1 Excel tool, Composite Risk Score"
-PPH_SLIDE = ("Systematic review & meta-analysis of PPH risk factors "
-             "(27 studies, 47 factors assessed, 15 definite/likely); pooled OR")
 
 
 def _f(id, label, domain, icd10=(), **kw) -> RiskFactor:
@@ -103,8 +107,27 @@ COMORBIDITIES: list[RiskFactor] = [
     _f("homeless", "No fixed address", "social", ["Z590"]),
     _f("nonadherence", "Medication non-adherence", "social", ["Z911"]),
     _f("dialysis", "Dialysis patient", "renal", ["Z992", "Z49"]),
-    _f("pregnancy", "Active pregnancy / postpartum", "obstetric", ["O", "Z33", "Z34", "Z39", "Z3A"],
-       notes="Activates the obstetric hemorrhage module."),
+    _f("pregnancy", "Active pregnancy / postpartum", "other", ["O", "Z33", "Z34", "Z39", "Z3A"]),
+    # v1 panel items that need more than a diagnosis code
+    _f("recent_surgery", "Recent surgery (< 30 days)", "surgical",
+       derived="FHIR Procedure, surgical category, performed within 30 days of the current clock"),
+    _f("recent_hospitalization", "Recent hospitalization (< 90 days)", "utilization",
+       derived="FHIR Encounter, inpatient class, ended within 90 days of the current clock"),
+    _f("polypharmacy", "Polypharmacy (> 5 active medications)", "medication",
+       derived="count of distinct active medication orders/statements > 5"),
+    _f("high_dose_diuretic", "High-dose loop diuretic", "medication",
+       derived="single loop-diuretic dose >= 80 mg furosemide-equivalent "
+               "(bumetanide 1 mg = torsemide 20 mg = furosemide 40 mg)"),
+    _f("language_barrier", "Language barrier", "social",
+       derived="Patient.communication preferred language not English, or interpreter-required extension"),
+    _f("advance_directive", "Advance directive on file", "goals_of_care",
+       derived="FHIR Consent with an advance-directive category"),
+    _f("alc", "ALC / awaiting placement", "utilization", ["Z751"]),
+    _f("poor_social_support", "Poor social support", "social", ["Z602", "Z636", "Z742"]),
+    _f("thrombophilia", "Thrombophilia", "hematologic", ["D685", "D686"]),
+    _f("pe_risk", "VTE risk: Padua score >= 4", "hematologic",
+       derived="Padua Prediction Score (Barbar 2010) from registry factors and age; "
+               "reduced mobility and hormonal therapy are not captured, so it can under-score"),
 ]
 
 # --- Charlson Comorbidity Index -----------------------------------------------
@@ -159,36 +182,6 @@ CHARLSON: list[RiskFactor] = [
     _cci("cci_hiv", "AIDS / HIV", 4, ["B20", "B21", "B22", "B24"]),
 ]
 
-# --- Obstetric hemorrhage: example module (off by default) --------------------
-# This is the worked example from the lecture slide, kept as a template for
-# how a pooled-OR-weighted factor set plugs in. Enable with
-# Config(obstetric_module=True).
-# The five factors with the greatest confirmed pooled risk are weighted by
-# their pooled ORs. The remaining "definite/likely" factors from the review
-# were not on the slide: they are listed as candidates with no OR so they are
-# monitored but contribute nothing until the review's numbers are entered.
-OBSTETRIC: list[RiskFactor] = [
-    _f("ob_previa_abruption", "Placenta previa / abruption", "obstetric", ["O44", "O45"],
-       odds_ratio=2.74, status="pooled_or", source=PPH_SLIDE),
-    _f("ob_uterine_rupture", "Uterine rupture", "obstetric", ["O710", "O711"],
-       odds_ratio=2.35, status="pooled_or", source=PPH_SLIDE),
-    _f("ob_prior_pph", "Prior postpartum hemorrhage", "obstetric", ["Z8759"],
-       odds_ratio=2.25, status="pooled_or", source=PPH_SLIDE,
-       notes="Z87.59 is broad (any prior pregnancy complication); prefer an explicit history flag."),
-    _f("ob_multiple_gestation", "Multiple gestation", "obstetric", ["O30"],
-       odds_ratio=2.16, status="pooled_or", source=PPH_SLIDE),
-    _f("ob_prolonged_labor", "Prolonged labor", "obstetric", ["O63"],
-       odds_ratio=1.76, status="pooled_or", source=PPH_SLIDE),
-    _f("ob_accreta", "Placenta accreta spectrum", "obstetric", ["O432"], status="candidate"),
-    _f("ob_chorioamnionitis", "Chorioamnionitis", "obstetric", ["O4112"], status="candidate"),
-    _f("ob_hypertensive", "Preeclampsia / HELLP", "obstetric", ["O11", "O14"], status="candidate"),
-    _f("ob_prior_cesarean", "Prior cesarean delivery", "obstetric", ["O3421"], status="candidate"),
-    _f("ob_polyhydramnios", "Polyhydramnios", "obstetric", ["O40"], status="candidate"),
-    _f("ob_macrosomia", "Fetal macrosomia", "obstetric", ["O366"], status="candidate"),
-    _f("ob_fibroids", "Uterine fibroids in pregnancy", "obstetric", ["O341"], status="candidate"),
-    _f("ob_anemia", "Anemia in pregnancy", "obstetric", ["O990"], status="candidate"),
-]
-
 # --- High-risk medication classes ------------------------------------------
 MEDICATIONS: list[RiskFactor] = [
     RiskFactor("anticoagulant", "Anticoagulants", "medication", crs_points=1.0, status="v1_prior", source=V1,
@@ -225,15 +218,42 @@ MEDICATIONS: list[RiskFactor] = [
     RiskFactor("methotrexate", "Methotrexate", "medication", ingredients=("methotrexate",)),
     RiskFactor("antiarrhythmic", "Antiarrhythmics", "medication",
                ingredients=("amiodarone", "sotalol", "flecainide", "dofetilide")),
-    RiskFactor("vasoactive", "Vasopressors / vasodilators", "medication",
+    RiskFactor("vasopressor", "Vasopressors / inotropes", "medication",
                ingredients=("norepinephrine", "epinephrine", "vasopressin", "phenylephrine", "dopamine",
-                            "dobutamine", "nitroglycerin", "nicardipine")),
-    RiskFactor("nephrotoxin", "Nephrotoxins", "medication",
-               ingredients=("gentamicin", "tobramycin", "amikacin", "vancomycin", "ibuprofen", "ketorolac", "naproxen")),
+                            "dobutamine", "milrinone", "angiotensin ii")),
+    RiskFactor("vasodilator", "Vasodilators (IV)", "medication",
+               ingredients=("nitroglycerin", "nicardipine", "nitroprusside", "clevidipine")),
+    RiskFactor("nsaid", "NSAIDs", "medication",
+               ingredients=("ibuprofen", "ketorolac", "naproxen", "diclofenac", "meloxicam", "indomethacin",
+                            "celecoxib")),
+    RiskFactor("aminoglycoside", "Aminoglycosides", "medication", ingredients=("gentamicin", "tobramycin", "amikacin")),
+    RiskFactor("nephrotoxin", "Other nephrotoxins", "medication",
+               ingredients=("vancomycin", "amphotericin", "polymyxin", "colistin", "foscarnet", "cidofovir")),
+    RiskFactor("antiepileptic", "Antiepileptics", "medication",
+               ingredients=("levetiracetam", "phenytoin", "valproate", "valproic", "carbamazepine",
+                            "lamotrigine", "lacosamide", "phenobarbital", "oxcarbazepine", "topiramate")),
+    RiskFactor("ppi", "Proton-pump inhibitors", "medication",
+               ingredients=("omeprazole", "pantoprazole", "esomeprazole", "lansoprazole", "rabeprazole")),
+    RiskFactor("chemotherapy", "Chemotherapy agents", "medication",
+               ingredients=("cyclophosphamide", "doxorubicin", "cisplatin", "carboplatin", "oxaliplatin",
+                            "paclitaxel", "docetaxel", "fluorouracil", "gemcitabine", "capecitabine",
+                            "etoposide", "vincristine", "cytarabine", "pemetrexed")),
+    RiskFactor("biologic", "Biologic agents / mAbs", "medication",
+               ingredients=("mab ", "infliximab", "adalimumab", "rituximab", "tocilizumab", "pembrolizumab",
+                            "nivolumab", "etanercept", "ustekinumab", "vedolizumab", "ipilimumab")),
+    RiskFactor("thyroid_med", "Thyroid medications", "medication",
+               ingredients=("levothyroxine", "liothyronine", "methimazole", "propylthiouracil")),
+    RiskFactor("tca", "Tricyclic antidepressants", "medication",
+               ingredients=("amitriptyline", "nortriptyline", "imipramine", "doxepin", "desipramine",
+                            "clomipramine")),
+    RiskFactor("serotonergic", "Serotonergic agents", "medication",
+               ingredients=("sertraline", "fluoxetine", "citalopram", "escitalopram", "paroxetine",
+                            "venlafaxine", "duloxetine", "trazodone", "linezolid", "ondansetron")),
+    RiskFactor("maoi", "MAOIs", "medication",
+               ingredients=("phenelzine", "tranylcypromine", "isocarboxazid", "selegiline", "rasagiline")),
 ]
 
-ALL: dict[str, RiskFactor] = {f.id: f for f in COMORBIDITIES + CHARLSON + OBSTETRIC + MEDICATIONS}
-OBSTETRIC_IDS = {f.id for f in OBSTETRIC}
+ALL: dict[str, RiskFactor] = {f.id: f for f in COMORBIDITIES + CHARLSON + MEDICATIONS}
 COMORBIDITY_IDS = {f.id for f in COMORBIDITIES}
 CHARLSON_IDS = {f.id for f in CHARLSON}
 
@@ -245,8 +265,11 @@ def _norm(code: str) -> str:
 def factors_for_icd10(code: str) -> list[RiskFactor]:
     """All condition factors whose ICD-10 prefixes match ``code``."""
     c = _norm(code)
-    return [f for f in COMORBIDITIES + CHARLSON + OBSTETRIC
+    return [f for f in COMORBIDITIES + CHARLSON
             if any(c.startswith(_norm(p)) for p in f.icd10)]
+
+
+LOOP_DIURETIC_FUROSEMIDE_EQ = {"furosemide": 1.0, "bumetanide": 40.0, "torsemide": 2.0}
 
 
 def medication_classes(text: str) -> list[RiskFactor]:

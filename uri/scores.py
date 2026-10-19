@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .config import Config
-from .registry import ALL, CHARLSON, COMORBIDITY_IDS, OBSTETRIC_IDS
+from .registry import ALL, CHARLSON, COMORBIDITY_IDS
 
 
 @dataclass
@@ -235,6 +235,8 @@ def estimated_fio2(v: dict) -> tuple[float | None, bool]:
     """(FiO2 %, measured?) from charted FiO2, nasal-cannula flow, or room air."""
     if v.get("fio2") is not None:
         return v["fio2"], True
+    if (v.get("resp_support") or 0) >= 2:
+        return None, False  # HFNC / NIV / ventilator flow says nothing about FiO2
     if v.get("o2_supplemental"):
         flow = v.get("o2_flow")
         # ~4% per L/min over room air is the usual low-flow approximation.
@@ -264,7 +266,7 @@ def pf_equivalent(v: dict) -> tuple[float | None, str]:
     return (spo2 / frac - 64) / 0.84, "S/F"
 
 
-def sofa(v: dict, meds: set[str]) -> ScoreResult:
+def sofa(v: dict, meds: set[str], n_pressors: int = 0) -> ScoreResult:
     r = ScoreResult(0)
     d = r.components
 
@@ -275,7 +277,7 @@ def sofa(v: dict, meds: set[str]) -> ScoreResult:
         # 3-4 points require respiratory support; a charted FiO2 above room
         # air (HFNC / NIV / ventilator) is taken as support.
         fio2, measured = estimated_fio2(v)
-        support = measured and fio2 > 21
+        support = (measured and fio2 > 21) or (v.get("resp_support") or 0) >= 2
         pts = 0 if pf >= 400 else 1 if pf >= 300 else 2 if pf >= 200 else (3 if pf >= 100 else 4)
         d["respiration"] = pts if support else min(pts, 2)
         if method == "S/F":
@@ -294,11 +296,12 @@ def sofa(v: dict, meds: set[str]) -> ScoreResult:
         d["liver"] = 0 if bili < 1.2 else 1 if bili < 2.0 else 2 if bili < 6.0 else 3 if bili < 12.0 else 4
 
     m = mean_arterial(v)
-    if "vasoactive" in meds:
-        # Doses are not streamed yet: any vasoactive infusion is scored 3
-        # (norepinephrine/epinephrine <= 0.1 mcg/kg/min equivalent).
-        d["cardiovascular"] = 3
-        r.flags.append("cardiovascular from vasoactive exposure (dose unknown)")
+    if n_pressors >= 2 or "vasopressor" in meds:
+        # Doses are not streamed yet. One agent is scored 3 (norepinephrine /
+        # epinephrine <= 0.1 mcg/kg/min equivalent); two or more concurrent
+        # agents imply refractory shock and are scored 4.
+        d["cardiovascular"] = 4 if n_pressors >= 2 else 3
+        r.flags.append("cardiovascular from vasopressor count (dose unknown)")
     elif m is None:
         r.missing.append("cardiovascular")
     else:
@@ -317,6 +320,30 @@ def sofa(v: dict, meds: set[str]) -> ScoreResult:
         d["renal"] = 0 if cr < 1.2 else 1 if cr < 2.0 else 2 if cr < 3.5 else 3 if cr < 5.0 else 4
 
     r.total = sum(d.values())
+    return r
+
+
+# --- Padua Prediction Score for VTE (Barbar 2010) ------------------------------
+
+def padua(factors: set[str], age: float | None) -> ScoreResult:
+    """Built from registry factors. Reduced mobility (3) and hormonal therapy
+    (1) are not in the stream, so the score can under-estimate."""
+    r = ScoreResult(0)
+    items = [
+        ("active_cancer", 3, bool(factors & {"malignancy", "cci_malignancy", "cci_metastatic", "active_chemo"})),
+        ("previous_vte", 3, "dvt_pe" in factors),
+        ("thrombophilia", 3, "thrombophilia" in factors),
+        ("recent_trauma_surgery", 2, "recent_surgery" in factors),
+        ("age_ge_70", 1, age is not None and age >= 70),
+        ("heart_or_respiratory_failure", 1, bool(factors & {"chf", "cci_chf", "copd", "cci_pulmonary"})),
+        ("mi_or_ischemic_stroke", 1, bool(factors & {"cci_mi", "stroke_tia"})),
+        ("infection_or_rheumatologic", 1, bool(factors & {"sepsis_prior", "cci_rheumatic", "bone_joint_infection",
+                                                          "tb_infectious"})),
+        ("obesity", 1, "obesity" in factors),
+    ]
+    r.components = {name: pts for name, pts, hit in items if hit}
+    r.total = sum(r.components.values())
+    r.missing = ["reduced_mobility", "hormonal_therapy"]
     return r
 
 
@@ -339,8 +366,7 @@ def charlson(factors: set[str]) -> ScoreResult:
 
 # --- CRS2: biomarkers and host factors not already in NEWS2 or SOFA ----------
 
-def crs2(v: dict, ctx: dict, factors: set[str], meds: set[str], cci_total: float, cfg: Config,
-         ob_active: bool = False) -> ScoreResult:
+def crs2(v: dict, ctx: dict, factors: set[str], meds: set[str], cci_total: float, cfg: Config) -> ScoreResult:
     """Unlike v1 CRS it does not re-score vital signs (NEWS2 covers them) or
     creatinine/platelets/bilirubin (SOFA covers them), and it uses the
     Charlson index instead of ad-hoc comorbidity points."""
@@ -368,9 +394,6 @@ def crs2(v: dict, ctx: dict, factors: set[str], meds: set[str], cci_total: float
     d["comorbidity_charlson"] = min(6, cci_total)
     d["medication"] = sum(ALL[m].crs_points for m in meds if m in ALL)
     d["frailty_age"] = _frailty_age(ctx, r)
-    if ob_active:
-        ob_log_or = sum(ALL[f].log_odds for f in factors if f in OBSTETRIC_IDS)
-        d["obstetric_hemorrhage"] = round(min(cfg.ob_points_cap, cfg.ob_points_per_log_or * ob_log_or), 2)
 
     for lab in ("lactate", "hgb", "troponin_hs", "k", "glucose", "wbc"):
         if v.get(lab) is None:
@@ -419,7 +442,7 @@ def floor(news2_result: ScoreResult, sofa_rise: float | None, v: dict, meds: set
         tiers.append((21.0, "NEWS2 single parameter = 3 (RCP low-medium)"))
     if sofa_rise is not None and sofa_rise >= 2:
         tiers.append((41.0, "acute SOFA rise >= 2 (Sepsis-3 organ dysfunction)"))
-    if "vasoactive" in meds and v.get("lactate") is not None and v["lactate"] > 2:
+    if "vasopressor" in meds and v.get("lactate") is not None and v["lactate"] > 2:
         tiers.append((81.0, "vasopressor with lactate > 2 (Sepsis-3 septic shock criteria)"))
     return max(tiers)
 

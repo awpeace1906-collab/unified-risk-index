@@ -16,7 +16,7 @@ HORIZONS_H = (6, 12, 24, 36, 48)
 
 FEATURES = (
     "news2", "qsofa", "mews", "sofa", "sofa_rise", "crs", "crs2", "charlson",
-    "trajectory", "age", "organs_measured",
+    "trajectory", "age", "organs_measured", "critical_values", "resp_support", "n_pressors",
 )
 
 
@@ -38,6 +38,9 @@ def features(snap: dict) -> dict:
         # How much of SOFA was measured: ordering labs is itself a signal of
         # clinician concern, and it separates "normal" from "not checked".
         "organs_measured": 6 - len(sc["sofa"]["missing"]),
+        "critical_values": sum(1 for c in snap.get("critical_values", []) if c["severity"] == "critical"),
+        "resp_support": snap.get("context", {}).get("resp_support") or 0,
+        "n_pressors": snap.get("context", {}).get("n_pressors") or 0,
     }
 
 

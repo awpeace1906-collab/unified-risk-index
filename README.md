@@ -1,14 +1,23 @@
 # Unified Risk Index (URI) v2: streaming
 
-URI v1 is a one-time triage score. **v2 recalculates every time the EMR sends
-a value**, scores how the patient is changing, and can be calibrated to real
-6–48 h probabilities from your outcome data.
+Decompensation prediction for adult emergency department and critical-care
+patients, built on the risk factors defined in URI v1. URI v1 is a one-time
+triage score. **v2 recalculates every time the EMR sends a value**, scores
+how the patient is changing, captures the study's composite outcome from the
+same stream, and can be calibrated to real 6–48 h probabilities.
 
 * **Index:** NEWS2 (physiology) + SOFA (organ dysfunction) + CRS2 (biomarkers,
   Charlson comorbidity, medications, frailty). One channel per kind of
   information, so no vital sign is counted twice.
 * **Trajectory layer:** NEWS2/SOFA rises, shock index, Hgb drop, lactate
   clearance, KDIGO AKI, troponin delta, oxygenation, ROX.
+* **Full v1 coverage:** all 60 history items, 28 medication classes and 33 numeric labs
+  are detected from the EMR. Items with no diagnosis code are derived from
+  Procedure, Encounter, medication and Consent data, plus the Padua score.
+* **Critical care:** respiratory-support ladder, vasopressor count, 21
+  correctable causes, and the v1 critical-value panel.
+* **Outcome capture:** ICU transfer, intubation, vasopressor start, death and
+  RRT, taken from the stream and kept out of the predictors.
 * **Escalation floor:** the URI is never less urgent than the NEWS2 / Sepsis-3
   tier the patient already meets.
 * **Calibration:** `python -m uri.calibrate` fits per-horizon probabilities
@@ -24,9 +33,9 @@ a value**, scores how the patient is changing, and can be calibrated to real
 The engine needs no dependencies; Python ≥ 3.10. Calibration needs numpy.
 
 ```bash
-python -m uri demo                       # sepsis, occult GI bleed, stable patient
+python -m uri demo                       # sepsis, occult GI bleed, hypercapnic resp. failure, stable
 python -m uri simulate > feed.ndjson     # write the synthetic FHIR feed
-python -m uri replay feed.ndjson --log snapshots.jsonl
+python -m uri replay feed.ndjson --log snapshots.jsonl --outcomes-out outcomes.csv
 python -m uri serve --port 8080 --log shadow.jsonl   # receive FHIR pushes
 python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv --bootstrap 200 --out model.json
 python -m unittest discover -s tests -t .
@@ -49,23 +58,27 @@ cross RCP's emergency tier:
 | `Observation` (LOINC) | vitals (incl. BP panel, O₂ flow/FiO₂, GCS), ~40 labs, unit-converted |
 | `Condition` (ICD-10-CM) | Charlson categories (Quan coding) and the ~50 v1 PMHx factors |
 | `MedicationRequest` / `Statement` / `Administration` | 19 high-risk medication classes |
-| `Patient` | age |
-| local flowsheet codes | anything else (QBL, CFS, …), mapped via `local_codes` in the config |
+| `Patient` | age, language / interpreter need, death |
+| `Procedure` | recent surgery, intubation (outcome) |
+| `Encounter` | recent hospitalization, ICU transfer (outcome) |
+| `Consent` | advance directive |
+| local flowsheet codes | O₂ device / ventilation mode, Clinical Frailty Scale, RRT activation, … via `local_codes` |
 
 ## Each snapshot contains
 
 `uri` (streaming index), `uri_static` (no trend term) and `uri_v1`, band,
 escalation floor and its reason, NEWS2/qSOFA/MEWS/SOFA/Charlson/CRS/CRS2
-detail, trajectory signals, 6–48 h windows (fitted probabilities once a
-model is loaded), the ranked correctable causes with the reason each fired,
-active risk factors with their evidence status, stale and missing data, and
-alerts.
+detail, Padua, trajectory signals, 6–48 h windows (fitted probabilities once
+a model is loaded), the ranked correctable causes with the reason each
+fired, critical values, active risk factors with their evidence status,
+composite outcomes observed so far, study eligibility, stale and missing
+data, and alerts.
 
 ## Docs
 
 * [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the index formula, trajectory signals, streaming behaviour, and how this fits the Phase 1–4 research plan
-* [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry (Charlson, v1 priors, tracked factors; pooled-OR method with the PPH example module)
+* [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry and its coverage of the v1 panels
 * [docs/EXCEL_RECONCILIATION.md](docs/EXCEL_RECONCILIATION.md): cell-reference bugs in the v1 workbook and the decisions they need
 
 ## Layout
@@ -78,7 +91,8 @@ uri/
   series.py     time-ordered per-parameter series
   scores.py     NEWS2, qSOFA, MEWS, SOFA, Charlson, CRS, CRS2, floor, composite
   trends.py     trajectory signals
-  causes.py     correctable-cause rules
+  causes.py     correctable-cause rules (21)
+  labs.py       v1 critical / flag thresholds
   engine.py     per-patient state, recompute, alerts, sinks
   model.py      feature definition + fitted-model scoring
   calibrate.py  per-horizon logistic fit, bootstrap validation (numpy)

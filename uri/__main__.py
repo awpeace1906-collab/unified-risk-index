@@ -15,24 +15,28 @@ from .fhir import FhirAdapter
 
 def _engine(args) -> tuple[Engine, FhirAdapter]:
     cfg = Config.from_json(args.config) if args.config else Config()
-    cfg.local_codes = {**simulate.LOCAL_CODES, **cfg.local_codes}
-    if "pph" in getattr(args, "scenario", []):
-        cfg.obstetric_module = True  # the PPH example needs its module
+    cfg.local_codes = {**simulate.LOCAL_CODES, **cfg.local_codes}  # demo O2-device row
     sinks = []
     if args.log:
         fh = open(args.log, "a")
         sinks.append(lambda snap: (fh.write(json.dumps(snap) + "\n"), fh.flush()))
-    return Engine(cfg, sinks), FhirAdapter(cfg.local_codes)
+    return Engine(cfg, sinks), FhirAdapter(cfg.local_codes, icu_patterns=tuple(cfg.icu_location_patterns))
+
+
+_printed_outcomes: set = set()
 
 
 def _print_row(snap: dict) -> None:
     sig = ", ".join(s["id"] for s in snap["trajectory"]["signals"]) or "-"
     causes = "; ".join(c["cause"] for c in snap["correctable_causes"][:2]) or "-"
     alerts = " ".join(f"[{a['type']}]" for a in snap["alerts"])
-    print(f"{snap['time'][11:16]}  {snap['patient_id']:<12} URI {snap['uri']:5.1f} "
+    new = [o for o in snap.get("outcomes", []) if (snap["patient_id"], o["type"]) not in _printed_outcomes]
+    _printed_outcomes.update((snap["patient_id"], o["type"]) for o in new)
+    outcomes = "".join(f" <outcome: {o['type']} {o['time'][11:16]}>" for o in new)
+    print(f"{snap['time'][11:16]}  {snap['patient_id']:<16} URI {snap['uri']:5.1f} "
           f"({snap['band']:<12}) static {snap['uri_static']:5.1f} +traj {snap['trajectory']['added']:4.1f} "
           f"| v1 {snap['uri_v1']:5.1f} | SOFA {snap['scores']['sofa']['total']:g}  "
-          f"signals: {sig}  causes: {causes} {alerts}")
+          f"signals: {sig}  causes: {causes} {alerts}{outcomes}")
 
 
 def _run(engine: Engine, adapter: FhirAdapter, records) -> None:
@@ -66,6 +70,7 @@ def main(argv=None) -> int:
         s = sub.add_parser(name)
         s.add_argument("--config", help="JSON config overriding defaults")
         s.add_argument("--log", help="append every snapshot as JSONL (shadow-mode log)")
+        s.add_argument("--outcomes-out", help="write observed composite outcomes as CSV (input to uri.calibrate)")
     sub.choices["demo"].add_argument("--scenario", nargs="+", default=simulate.DEFAULT_SCENARIOS,
                                      choices=list(simulate.SCENARIOS))
     sub.choices["replay"].add_argument("file", help="NDJSON of FHIR resources or normalized events")
@@ -94,6 +99,11 @@ def main(argv=None) -> int:
             httpd.serve_forever()
         except KeyboardInterrupt:
             pass
+    if getattr(args, "outcomes_out", None):
+        with open(args.outcomes_out, "w") as fh:
+            fh.write("patient_id,time,type\n")
+            for pid, kind, t in engine.outcomes():
+                fh.write(f"{pid},{t.isoformat()},{kind}\n")
     if adapter.skipped:
         print(f"skipped: {dict(adapter.skipped)}", file=sys.stderr)
     return 0

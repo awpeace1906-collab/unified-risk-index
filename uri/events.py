@@ -15,8 +15,17 @@ MEASUREMENT = "measurement"  # vital sign or lab result (numeric / bool / str)
 CONDITION = "condition"      # risk factor from the problem list / diagnoses
 MEDICATION = "medication"    # medication class exposure
 CONTEXT = "context"          # demographics and other slowly changing facts
+OUTCOME = "outcome"          # a component of the study's composite outcome
 
-KINDS = {MEASUREMENT, CONDITION, MEDICATION, CONTEXT}
+KINDS = {MEASUREMENT, CONDITION, MEDICATION, CONTEXT, OUTCOME}
+
+# Composite decompensation outcome (study protocol): unplanned ICU transfer,
+# rapid response activation, emergent intubation, vasopressor initiation, death.
+OUTCOME_TYPES = {"icu_transfer", "rrt", "intubation", "vasopressor_start", "death"}
+
+# Respiratory support ladder (resp_support values)
+RESP_SUPPORT = {0: "room air", 1: "low-flow O2", 2: "high-flow nasal cannula", 3: "non-invasive ventilation",
+                4: "invasive ventilation"}
 
 # parameter -> (category, canonical unit)
 PARAMETERS: dict[str, tuple[str, str]] = {
@@ -33,10 +42,10 @@ PARAMETERS: dict[str, tuple[str, str]] = {
     "o2_supplemental": ("vital", "bool"),
     "fio2": ("vital", "%"),
     "o2_flow": ("vital", "L/min"),
+    "resp_support": ("vital", "0-4"),
     "urine_ml_hr": ("vital", "mL/h"),
     "etco2": ("vital", "mmHg"),
     "pain": ("vital", "{score}"),
-    "qbl_ml": ("vital", "mL"),  # cumulative quantitative blood loss
     # labs
     "lactate": ("lab", "mmol/L"),
     "wbc": ("lab", "10*3/uL"),
@@ -70,11 +79,12 @@ PARAMETERS: dict[str, tuple[str, str]] = {
     "phos": ("lab", "mg/dL"),
     "cortisol": ("lab", "ug/dL"),
     "tsh": ("lab", "m[IU]/L"),
+    "hba1c": ("lab", "%"),
 }
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)  # time for undated facts
 
-CONTEXT_KEYS = {"age", "cfs", "sex", "hypercapnic_target", "ob_status"}
+CONTEXT_KEYS = {"age", "cfs", "sex", "hypercapnic_target", "last_surgery", "last_inpatient_discharge"}
 
 
 def utc(dt: datetime) -> datetime:
@@ -112,6 +122,8 @@ class Event:
             raise ValueError(f"unknown measurement parameter {self.code!r}")
         if self.kind == CONTEXT and self.code not in CONTEXT_KEYS:
             raise ValueError(f"unknown context key {self.code!r}")
+        if self.kind == OUTCOME and self.code not in OUTCOME_TYPES:
+            raise ValueError(f"unknown outcome type {self.code!r}")
         object.__setattr__(self, "time", utc(self.time))
 
     def to_dict(self) -> dict:

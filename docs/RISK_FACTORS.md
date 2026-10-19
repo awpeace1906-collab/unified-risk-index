@@ -1,9 +1,9 @@
 # Risk-factor registry
 
-The registry applies the method from the lecture slide ("Step One: Rigorously
-Define the Risk Factors") to the whole index: define every candidate risk
-factor up front, record how it is detected in the EMR and what evidence backs
-it, and weight it only as far as the evidence allows. The source of truth is
+Scope: decompensation in adult emergency department and critical-care
+patients. The registry starts from the risk factors defined in URI v1 (the
+Patient Input sheet's medical-history, medication and laboratory panels) and
+expands detection and scoring around them. The source of truth is
 `uri/registry.py`, and this file mirrors it.
 
 Every factor is **monitored** as soon as it appears in the EMR: it is listed
@@ -13,41 +13,51 @@ factor adds **points** only when evidence backs it:
 | Status | Meaning | Contributes |
 |---|---|---|
 | `validated_index` | Category of a published, validated index (Charlson, Quan ICD-10 coding) | Charlson points → CRS2 comorbidity (capped at 6) |
-| `pooled_or` | Pooled odds ratio from a systematic review / meta-analysis | `ln(OR)`-scaled points |
 | `v1_prior` | Point weight carried over from URI v1 (expert prior) | v1 CRS; medication points in CRS2 |
-| `tracked` | Monitored, displayed, used by cause rules | nothing yet |
-| `candidate` | Proposed; confirm against the source review | nothing yet |
+| `tracked` | Monitored, displayed, used by cause rules and Padua | nothing directly; the fitted model can weight it |
+| `pooled_or` | Pooled odds ratio from a systematic review | `k × ln(OR)` points (none in use yet; see below) |
+
+## Coverage of the v1 panels
+
+| v1 panel | v1 items | Detected from the EMR |
+|---|---|---|
+| Medical history | 60 | All 60. Most by ICD-10-CM. Nine needed other data: recent surgery (Procedure), recent hospitalization (Encounter), polypharmacy (medication count), high-dose diuretic (dose), language barrier (Patient.communication), advance directive (Consent), PE risk (Padua score), frailty (CFS flowsheet), ALC and poor social support (Z codes). |
+| High-risk medications | 28 classes | All 28, as 30 registry classes (oral hypoglycemics split into SGLT2 inhibitors / sulfonylureas; vasopressors split from vasodilators) |
+| Laboratory | 36 items | All 33 numeric items are used: scored (NEWS2/SOFA/CRS2), trended (repeat lactate, serial troponin, Hgb, creatinine), in cause rules, or in the critical-value panel (`uri/labs.py`). HbA1c is tracked as glucose context. The 3 order/qualitative items (blood cultures, UA, urine hCG) are not scored. |
+
+### Derived factors
+
+| Factor | Derivation |
+|---|---|
+| `recent_surgery` | FHIR Procedure with surgical category (SNOMED 387713003) performed ≤ 30 d before the current clock |
+| `recent_hospitalization` | FHIR Encounter, inpatient class, finished ≤ 90 d before the current clock |
+| `polypharmacy` | > 5 distinct active medications, mapped or not, counted once per ingredient |
+| `high_dose_diuretic` | single loop-diuretic dose ≥ 80 mg furosemide-equivalent (bumetanide 1 mg = torsemide 20 mg = furosemide 40 mg) |
+| `language_barrier` | preferred language not English, or the interpreter-required extension |
+| `advance_directive` | Consent with an advance-directive category |
+| `frailty_dx` | ICD-10 R54, or Clinical Frailty Scale ≥ 5 |
+| `pe_risk` | Padua Prediction Score ≥ 4 (Barbar 2010), built from registry factors and age. Reduced mobility and hormonal therapy are not in the stream, so it can under-score. |
 
 ## Comorbidity: Charlson replaces the v1 points
 
 v1 gave CHF, COPD, CAD, CKD and malignancy hand-picked points. v2 uses the
 Charlson Comorbidity Index with the Quan 2005 ICD-10 coding algorithm and the
-Quan 2011 updated weights. Hierarchies are applied: complicated diabetes
-replaces uncomplicated, severe liver disease replaces mild, and metastatic
-tumor replaces any malignancy. The v1 points are still used, but only in
-`uri_v1`.
+Quan 2011 weights, with hierarchies applied (complicated over uncomplicated
+diabetes, severe over mild liver disease, metastatic over any malignancy).
+The v1 points are still used, but only in `uri_v1`.
 
-## How pooled odds ratios plug in (the slide's method)
+## Adding evidence-weighted factors
 
-A factor with a pooled OR contributes `k × ln(OR)` points, because odds ratios
-multiply and log-odds add. The slide's obstetric hemorrhage factors are kept
-as a worked example in an **optional module**, off by default
-(`obstetric_module: true` to enable).
+When a systematic review supplies pooled odds ratios for ED/ICU
+decompensation risk factors:
 
-To weight another factor set this way, for example from a systematic review
-of ED decompensation risk factors:
-
-1. Add the factors to `uri/registry.py` with `odds_ratio=…, status="pooled_or", source="…"`.
-2. Add a CRS2 domain that sums `ln(OR)` for those factors (see `obstetric_hemorrhage` in `scores.crs2`).
-3. Re-run `uri.calibrate`; the fitted model decides how much the domain is worth on your outcomes.
-
-The fitted model in `uri.calibrate` is the end point of this method: one
-multivariable logistic model whose coefficients are the local, adjusted log
-odds ratios.
+1. Set `odds_ratio=…, status="pooled_or", source="…"` on the factors in `uri/registry.py`.
+2. Add a CRS2 domain that sums `ln(OR)` over present factors (odds ratios multiply, so log-odds add).
+3. Re-run `uri.calibrate`; the fitted model's coefficients are the local, adjusted log odds ratios.
 
 ## Charlson categories
 
-| ID | Factor | ICD-10-CM prefixes | Charlson wt | Status |
+| ID | Factor | Detection | Charlson wt | Status |
 |---|---|---|---|---|
 | `cci_mi` | Myocardial infarction | I21, I22, I252 | 0 | validated_index |
 | `cci_chf` | Congestive heart failure | I099, I110, I130, I132, I255, I420, I425, I426, I427, I428, I429, I43, I50, P290 | 2 | validated_index |
@@ -67,9 +77,9 @@ odds ratios.
 | `cci_metastatic` | Metastatic solid tumor | C77, C78, C79, C80 | 6 | validated_index |
 | `cci_hiv` | AIDS / HIV | B20, B21, B22, B24 | 4 | validated_index |
 
-## Comorbidities (v1 PMHx panel)
+## Medical history (v1 panel)
 
-| ID | Factor | ICD-10-CM prefixes | v1 CRS pts | Status |
+| ID | Factor | Detection | v1 CRS pts | Status |
 |---|---|---|---|---|
 | `chf` | CHF / HFrEF / HFpEF | I50 | 2.0 | v1_prior |
 | `copd` | COPD / emphysema | J44, J43 | 2.0 | v1_prior |
@@ -122,8 +132,18 @@ odds ratios.
 | `nonadherence` | Medication non-adherence | Z911 |  | tracked |
 | `dialysis` | Dialysis patient | Z992, Z49 |  | tracked |
 | `pregnancy` | Active pregnancy / postpartum | O, Z33, Z34, Z39, Z3A |  | tracked |
+| `recent_surgery` | Recent surgery (< 30 days) | derived (see above) |  | tracked |
+| `recent_hospitalization` | Recent hospitalization (< 90 days) | derived (see above) |  | tracked |
+| `polypharmacy` | Polypharmacy (> 5 active medications) | derived (see above) |  | tracked |
+| `high_dose_diuretic` | High-dose loop diuretic | derived (see above) |  | tracked |
+| `language_barrier` | Language barrier | derived (see above) |  | tracked |
+| `advance_directive` | Advance directive on file | derived (see above) |  | tracked |
+| `alc` | ALC / awaiting placement | Z751 |  | tracked |
+| `poor_social_support` | Poor social support | Z602, Z636, Z742 |  | tracked |
+| `thrombophilia` | Thrombophilia | D685, D686 |  | tracked |
+| `pe_risk` | VTE risk: Padua score >= 4 | derived (see above) |  | tracked |
 
-## Medication classes
+## Medication classes (v1 panel)
 
 | ID | Factor | Ingredients | v1 CRS pts | Status |
 |---|---|---|---|---|
@@ -144,25 +164,16 @@ odds ratios.
 | `lithium` | Lithium | lithium |  | tracked |
 | `methotrexate` | Methotrexate | methotrexate |  | tracked |
 | `antiarrhythmic` | Antiarrhythmics | amiodarone, sotalol, flecainide, dofetilide |  | tracked |
-| `vasoactive` | Vasopressors / vasodilators | norepinephrine, epinephrine, vasopressin, phenylephrine, dopamine, dobutamine, nitrogly… |  | tracked |
-| `nephrotoxin` | Nephrotoxins | gentamicin, tobramycin, amikacin, vancomycin, ibuprofen, ketorolac, naproxen |  | tracked |
-
-## Obstetric hemorrhage (example module, off by default)
-
-Pooled ORs from the slide's meta-analysis (27 studies, 47 factors, 15 definite/likely). Only the top five were shown; the `candidate` rows are placeholders until the review's full list is entered.
-
-| ID | Factor | ICD-10-CM prefixes | Pooled OR | Status |
-|---|---|---|---|---|
-| `ob_previa_abruption` | Placenta previa / abruption | O44, O45 | 2.74 | pooled_or |
-| `ob_uterine_rupture` | Uterine rupture | O710, O711 | 2.35 | pooled_or |
-| `ob_prior_pph` | Prior postpartum hemorrhage | Z8759 | 2.25 | pooled_or |
-| `ob_multiple_gestation` | Multiple gestation | O30 | 2.16 | pooled_or |
-| `ob_prolonged_labor` | Prolonged labor | O63 | 1.76 | pooled_or |
-| `ob_accreta` | Placenta accreta spectrum | O432 |  | candidate |
-| `ob_chorioamnionitis` | Chorioamnionitis | O4112 |  | candidate |
-| `ob_hypertensive` | Preeclampsia / HELLP | O11, O14 |  | candidate |
-| `ob_prior_cesarean` | Prior cesarean delivery | O3421 |  | candidate |
-| `ob_polyhydramnios` | Polyhydramnios | O40 |  | candidate |
-| `ob_macrosomia` | Fetal macrosomia | O366 |  | candidate |
-| `ob_fibroids` | Uterine fibroids in pregnancy | O341 |  | candidate |
-| `ob_anemia` | Anemia in pregnancy | O990 |  | candidate |
+| `vasopressor` | Vasopressors / inotropes | norepinephrine, epinephrine, vasopressin, phenylephrine, dopamine, dobutamine, milrinon… |  | tracked |
+| `vasodilator` | Vasodilators (IV) | nitroglycerin, nicardipine, nitroprusside, clevidipine |  | tracked |
+| `nsaid` | NSAIDs | ibuprofen, ketorolac, naproxen, diclofenac, meloxicam, indomethacin, celecoxib |  | tracked |
+| `aminoglycoside` | Aminoglycosides | gentamicin, tobramycin, amikacin |  | tracked |
+| `nephrotoxin` | Other nephrotoxins | vancomycin, amphotericin, polymyxin, colistin, foscarnet, cidofovir |  | tracked |
+| `antiepileptic` | Antiepileptics | levetiracetam, phenytoin, valproate, valproic, carbamazepine, lamotrigine, lacosamide, … |  | tracked |
+| `ppi` | Proton-pump inhibitors | omeprazole, pantoprazole, esomeprazole, lansoprazole, rabeprazole |  | tracked |
+| `chemotherapy` | Chemotherapy agents | cyclophosphamide, doxorubicin, cisplatin, carboplatin, oxaliplatin, paclitaxel, docetax… |  | tracked |
+| `biologic` | Biologic agents / mAbs | mab , infliximab, adalimumab, rituximab, tocilizumab, pembrolizumab, nivolumab, etanerc… |  | tracked |
+| `thyroid_med` | Thyroid medications | levothyroxine, liothyronine, methimazole, propylthiouracil |  | tracked |
+| `tca` | Tricyclic antidepressants | amitriptyline, nortriptyline, imipramine, doxepin, desipramine, clomipramine |  | tracked |
+| `serotonergic` | Serotonergic agents | sertraline, fluoxetine, citalopram, escitalopram, paroxetine, venlafaxine, duloxetine, … |  | tracked |
+| `maoi` | MAOIs | phenelzine, tranylcypromine, isocarboxazid, selegiline, rasagiline |  | tracked |

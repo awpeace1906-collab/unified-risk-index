@@ -67,19 +67,17 @@ class Config:
     bnp_severe_pg_ml: float = 400.0
     ntprobnp_severe_pg_ml: float = 1800.0
     shock_index_threshold: float = 1.0
-    obstetric_shock_index_threshold: float = 0.9
 
-    # --- Obstetric hemorrhage module (lecture example; off by default) -------
-    obstetric_module: bool = False
-    # CRS points per unit of summed ln(OR), and the cap for that domain.
-    ob_points_per_log_or: float = 2.0
-    ob_points_cap: float = 6.0
-    # Baseline PPH risk for the local population. Leave None until it comes
-    # from local data; the module then reports combined odds ratio only.
-    ob_baseline_pph_risk: float | None = None
+    # Location names (Encounter.location display) that count as ICU for the
+    # icu_transfer outcome.
+    icu_location_patterns: list = field(default_factory=lambda: [
+        "icu", "intensive care", "critical care", "micu", "sicu", "ccu", "cvicu"])
+    # Upper limit of normal for lipase (assay-specific), for the 3x ULN rule.
+    lipase_uln_u_l: float = 60.0
 
     # Extra code -> parameter mappings for local flowsheet rows, e.g.
-    # {"urn:oid:1.2.3|QBL": "qbl_ml", "urn:local|CFS": "cfs"}
+    # {"urn:oid:1.2.3|CFS": "cfs", "urn:oid:1.2.3|O2DEV": "resp_support",
+    #  "urn:oid:1.2.3|RRT": "outcome:rrt"}
     local_codes: dict = field(default_factory=dict)
 
     def weights_v1(self) -> dict:

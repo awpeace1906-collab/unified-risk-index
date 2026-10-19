@@ -105,7 +105,7 @@ class CrsTest(unittest.TestCase):
         self.assertEqual(r.total, 30)
 
     def test_unweighted_factors_add_nothing(self):
-        r = scores.crs({}, {}, {"htn", "ob_accreta", "cci_chf"}, {"diuretic"}, 0, 0, Config())
+        r = scores.crs({}, {}, {"htn", "pregnancy", "cci_chf"}, {"diuretic"}, 0, 0, Config())
         self.assertEqual(r.total, 0)
 
 
@@ -121,9 +121,14 @@ class SofaTest(unittest.TestCase):
         d = scores.sofa(v, set()).components
         self.assertEqual((d["coagulation"], d["liver"], d["renal"], d["cns"], d["cardiovascular"]), (3, 3, 3, 3, 1))
 
-    def test_vasoactive_scores_three(self):
-        r = scores.sofa({**NORMAL}, {"vasoactive"})
-        self.assertEqual(r.components["cardiovascular"], 3)
+    def test_vasopressors_score_three_or_four(self):
+        self.assertEqual(scores.sofa({**NORMAL}, {"vasopressor"}, 1).components["cardiovascular"], 3)
+        self.assertEqual(scores.sofa({**NORMAL}, {"vasopressor"}, 2).components["cardiovascular"], 4)
+
+    def test_hfnc_counts_as_respiratory_support(self):
+        v = {"po2": 60, "fio2": 50, "resp_support": 2}  # P/F 120 on HFNC
+        self.assertEqual(scores.sofa(v, set()).components["respiration"], 3)
+        self.assertIn("respiration", scores.sofa({"spo2": 92, "o2_flow": 40, "resp_support": 2}, set()).missing)
 
     def test_respiration_from_pao2_and_support(self):
         # P/F 150 on HFNC FiO2 60% -> 3; same ratio without support caps at 2
@@ -162,12 +167,6 @@ class Crs2Test(unittest.TestCase):
                           d["infection"], d["comorbidity_charlson"], d["medication"], d["frailty_age"]),
                          (6, 4, 4, 3, 4, 6, 1.0, 1))
 
-    def test_obstetric_domain_only_when_module_active(self):
-        cfg = Config(obstetric_module=True)
-        r = scores.crs2({}, {}, {"ob_previa_abruption"}, set(), 0, cfg, ob_active=True)
-        self.assertAlmostEqual(r.components["obstetric_hemorrhage"], 2.02, places=2)  # 2 * ln(2.74)
-        r = scores.crs2({}, {}, {"ob_previa_abruption"}, set(), 0, cfg, ob_active=False)
-        self.assertNotIn("obstetric_hemorrhage", r.components)
 
 
 if __name__ == "__main__":
