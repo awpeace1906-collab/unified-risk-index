@@ -55,12 +55,17 @@ def _volume(f: Facts):
 
 
 def _sepsis(f: Facts):
+    # qSOFA is a severity screen, not an infection marker: on its own it also
+    # fires for hemorrhage, PE or heart failure. Require evidence of infection.
     t = f.v.get("temp_c")
-    sirs_temp = t is not None and (t > 38.3 or t < 36)
-    sirs_wbc = f.gt("wbc", 12) or f.lt("wbc", 4)
-    return _why((f.qsofa >= 2, "qSOFA >= 2"),
-                (f.gt("procalcitonin", 0.49), "procalcitonin >= 0.5"),
-                (sirs_temp and sirs_wbc, "abnormal temperature and WBC"))
+    fever = t is not None and (t > 38.3 or t < 36)
+    wbc = f.gt("wbc", 12) or f.lt("wbc", 4)
+    pct = f.gt("procalcitonin", 0.49)
+    infection = fever or wbc or pct
+    return _why((f.qsofa >= 2 and infection, "qSOFA >= 2 with fever / WBC / procalcitonin"),
+                ("sofa_rise" in f.signals and infection, "new organ dysfunction (SOFA +2) with infection markers"),
+                (pct and f.gt("procalcitonin", 1.99), "procalcitonin >= 2"),
+                (fever and wbc, "abnormal temperature and WBC"))
 
 
 def _electrolyte(f: Facts):
@@ -124,7 +129,9 @@ def _dka(f: Facts):
 def _gi_bleed(f: Facts):
     unstable = f.gt("hr", 100) or f.lt("sbp", 90)
     context = "gi_bleed" in f.factors or "anticoagulant" in f.meds
-    return _why(("hgb_drop" in f.signals and (unstable or context), "falling Hgb with instability / bleeding risk"),
+    bun_cr = f.v["bun"] / f.v["creatinine"] if f.has("bun") and f.v.get("creatinine") else None
+    return _why(("hgb_drop" in f.signals and (unstable or context), "falling Hgb with instability / bleeding risk"
+                 + (f"; BUN/Cr {bun_cr:.0f} suggests upper GI source" if bun_cr and bun_cr > 30 else "")),
                 (f.lt("hgb", 8) and unstable and context, "Hgb < 8 with instability"))
 
 

@@ -35,14 +35,26 @@ def _num(series: Series | None, at: datetime, span: timedelta) -> list[tuple[dat
     return [(t, x) for t, x in series.window(at - span, at) if isinstance(x, (int, float))]
 
 
-def news2_rise(news2_hist: Series, at: datetime) -> Signal | None:
-    pts = _num(news2_hist, at, 6 * H)
+def component_rise(hist: Series, at: datetime, span: timedelta) -> float | None:
+    """Rise of a points-based score over its minimum in ``span``, summed per
+    component and counting only components that were measured before. A lab
+    resulting for the first time is new information, not deterioration."""
+    pts = hist.window(at - span, at) if hist else []
     if len(pts) < 2:
         return None
-    rise = pts[-1][1] - min(x for _, x in pts[:-1])
-    if rise >= 4:
+    rise = 0.0
+    for name, score in pts[-1][1].items():
+        prior = [p[name] for _, p in pts[:-1] if name in p]
+        if prior:
+            rise += score - min(prior)
+    return rise
+
+
+def news2_rise(news2_hist: Series, at: datetime) -> Signal | None:
+    rise = component_rise(news2_hist, at, 6 * H)
+    if rise is not None and rise >= 4:
         return Signal("news2_rise", 3, f"NEWS2 up {rise:g} points in 6 h")
-    if rise >= 2:
+    if rise is not None and rise >= 2:
         return Signal("news2_rise", 2, f"NEWS2 up {rise:g} points in 6 h")
     return None
 
@@ -138,6 +150,27 @@ def oxygenation_decline(spo2: Series, o2: Series, fio2: Series, at: datetime) ->
     return Signal("oxygenation_decline", 2, "; ".join(detail)) if detail else None
 
 
+def sofa_rise(sofa_hist: Series, at: datetime) -> Signal | None:
+    """Acute rise of >= 2 SOFA points over the 48 h minimum: the Sepsis-3
+    operational definition of new organ dysfunction."""
+    rise = component_rise(sofa_hist, at, 48 * H)
+    if rise is not None and rise >= 2:
+        return Signal("sofa_rise", 3, f"SOFA up {rise:g} points (>= 2: new organ dysfunction)")
+    return None
+
+
+def rox_low(v: dict) -> Signal | None:
+    """ROX = (SpO2 / FiO2) / RR, for patients on charted FiO2 (HFNC / NIV).
+    < 3.85 predicts high-flow failure (Roca 2019)."""
+    fio2, spo2, rr = v.get("fio2"), v.get("spo2"), v.get("rr")
+    if fio2 is None or fio2 <= 21 or spo2 is None or not rr:
+        return None
+    rox = spo2 / (fio2 / 100) / rr
+    if rox < 3.85:
+        return Signal("rox_low", 2, f"ROX {rox:.2f} (< 3.85)")
+    return None
+
+
 def rr_rise(rr: Series, at: datetime) -> Signal | None:
     pts = _num(rr, at, 4 * H)
     if len(pts) >= 2 and pts[-1][1] - min(x for _, x in pts[:-1]) >= 6:
@@ -165,12 +198,14 @@ def obstetric_bleeding(qbl: Series, fibrinogen: Series, at: datetime) -> list[Si
     return out
 
 
-def trajectory(series: dict[str, Series], news2_hist: Series, map_values, at: datetime,
-               cfg: Config, ob_active: bool) -> tuple[float, list[Signal]]:
+def trajectory(series: dict[str, Series], news2_hist: Series, sofa_hist: Series, map_values, v: dict,
+               at: datetime, cfg: Config, ob_active: bool) -> tuple[float, list[Signal]]:
     g = series.get
     si_threshold = cfg.obstetric_shock_index_threshold if ob_active else cfg.shock_index_threshold
     signals = [
         news2_rise(news2_hist, at),
+        sofa_rise(sofa_hist, at),
+        rox_low(v),
         shock_index_trend(g("hr"), g("sbp"), at, si_threshold),
         map_sustained_low(map_values),
         lactate_trend(g("lactate"), at),

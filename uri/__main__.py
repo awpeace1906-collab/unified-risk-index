@@ -16,6 +16,8 @@ from .fhir import FhirAdapter
 def _engine(args) -> tuple[Engine, FhirAdapter]:
     cfg = Config.from_json(args.config) if args.config else Config()
     cfg.local_codes = {**simulate.LOCAL_CODES, **cfg.local_codes}
+    if "pph" in getattr(args, "scenario", []):
+        cfg.obstetric_module = True  # the PPH example needs its module
     sinks = []
     if args.log:
         fh = open(args.log, "a")
@@ -28,7 +30,8 @@ def _print_row(snap: dict) -> None:
     causes = "; ".join(c["cause"] for c in snap["correctable_causes"][:2]) or "-"
     alerts = " ".join(f"[{a['type']}]" for a in snap["alerts"])
     print(f"{snap['time'][11:16]}  {snap['patient_id']:<12} URI {snap['uri']:5.1f} "
-          f"({snap['band']:<12}) v1 {snap['uri_static']:5.1f} +traj {snap['trajectory']['added']:4.1f}  "
+          f"({snap['band']:<12}) static {snap['uri_static']:5.1f} +traj {snap['trajectory']['added']:4.1f} "
+          f"| v1 {snap['uri_v1']:5.1f} | SOFA {snap['scores']['sofa']['total']:g}  "
           f"signals: {sig}  causes: {causes} {alerts}")
 
 
@@ -63,13 +66,13 @@ def main(argv=None) -> int:
         s = sub.add_parser(name)
         s.add_argument("--config", help="JSON config overriding defaults")
         s.add_argument("--log", help="append every snapshot as JSONL (shadow-mode log)")
-    sub.choices["demo"].add_argument("--scenario", nargs="+", default=list(simulate.SCENARIOS),
+    sub.choices["demo"].add_argument("--scenario", nargs="+", default=simulate.DEFAULT_SCENARIOS,
                                      choices=list(simulate.SCENARIOS))
     sub.choices["replay"].add_argument("file", help="NDJSON of FHIR resources or normalized events")
     sub.choices["serve"].add_argument("--host", default="127.0.0.1")
     sub.choices["serve"].add_argument("--port", type=int, default=8080)
     sim = sub.add_parser("simulate", help="write a synthetic FHIR NDJSON feed")
-    sim.add_argument("--scenario", nargs="+", default=list(simulate.SCENARIOS), choices=list(simulate.SCENARIOS))
+    sim.add_argument("--scenario", nargs="+", default=simulate.DEFAULT_SCENARIOS, choices=list(simulate.SCENARIOS))
     args = p.parse_args(argv)
 
     if args.cmd == "simulate":

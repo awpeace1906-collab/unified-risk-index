@@ -32,6 +32,7 @@ PARAMETERS: dict[str, tuple[str, str]] = {
     "avpu": ("vital", "A|C|V|P|U"),
     "o2_supplemental": ("vital", "bool"),
     "fio2": ("vital", "%"),
+    "o2_flow": ("vital", "L/min"),
     "urine_ml_hr": ("vital", "mL/h"),
     "etco2": ("vital", "mmHg"),
     "pain": ("vital", "{score}"),

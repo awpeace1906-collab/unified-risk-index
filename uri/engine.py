@@ -1,11 +1,13 @@
 """Streaming engine: keeps per-patient state and recomputes the index on
 every event.
 
-The output of each recompute is a snapshot dict containing:
-  uri_static  - URI v1 formula on the current physiology (comparable to v1)
-  uri         - uri_static + trajectory layer (the continuously updating index)
-  components, trajectory signals, time windows, correctable causes,
-  obstetric hemorrhage panel, active risk factors, data completeness, alerts
+Each recompute emits a snapshot with three index values:
+  uri         - URI v2 (NEWS2 + SOFA + CRS2) plus the trajectory layer,
+                never below the escalation floor: the continuously updating index
+  uri_static  - URI v2 on current values only (no trend term)
+  uri_v1      - the v1 formula (NEWS2 + qSOFA + MEWS + CRS), for comparison
+plus component detail, trajectory signals, risk windows, correctable causes,
+active risk factors, data completeness and alerts.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from typing import Callable, Iterable
 from . import causes, scores, trends
 from .config import Config
 from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, PARAMETERS, Event
+from .model import HORIZONS_H, Model
 from .registry import ALL, OBSTETRIC, OBSTETRIC_IDS
 from .series import Series
 
@@ -30,7 +33,8 @@ class PatientState:
         self.context: dict = {}
         self.factors: dict[str, dict] = {}  # id -> {"active": bool, "source": str}
         self.meds: dict[str, dict] = {}
-        self.news2_hist = Series()
+        self.news2_hist = Series()  # component dicts
+        self.sofa_hist = Series()   # component dicts
         self.map_hist = Series()
         self.uri_hist = Series()
         self.clock: datetime | None = None
@@ -58,9 +62,10 @@ class PatientState:
 
 
 class Engine:
-    def __init__(self, cfg: Config | None = None, sinks: Iterable[Sink] = ()):
+    def __init__(self, cfg: Config | None = None, sinks: Iterable[Sink] = (), model: Model | None = None):
         self.cfg = cfg or Config()
         self.sinks = list(sinks)
+        self.model = model or (Model.load(self.cfg.model_path) if self.cfg.model_path else None)
         self.patients: dict[str, PatientState] = {}
 
     # -- ingestion ---------------------------------------------------------
@@ -101,80 +106,106 @@ class Engine:
 
     # -- scoring -----------------------------------------------------------
 
-    def _current_values(self, s: PatientState, at: datetime) -> tuple[dict, list, list]:
-        values, stale, missing = {}, [], []
+    def _current_values(self, s: PatientState, at: datetime) -> tuple[dict, list]:
+        values, stale = {}, []
         for param, (category, _) in PARAMETERS.items():
             series = s.series.get(param)
             point = series.latest(at, self.cfg.usable(category)) if series else None
             if point is None:
-                missing.append(param)
                 continue
             t, value = point
             values[param] = value
             if at - t > self.cfg.fresh(category):
                 stale.append({"parameter": param, "age_min": int((at - t).total_seconds() // 60)})
-        return values, stale, missing
+        return values, stale
 
     def _recompute(self, s: PatientState, at: datetime) -> dict:
         cfg = self.cfg
-        v, stale, _ = self._current_values(s, at)
+        v, stale = self._current_values(s, at)
         factors, meds = s.active_factors(), s.active_meds()
-        ob_active = ("pregnancy" in factors or bool(factors & OBSTETRIC_IDS)
-                     or s.context.get("ob_status") in ("pregnant", "postpartum"))
+        ob_active = cfg.obstetric_module and (
+            "pregnancy" in factors or bool(factors & OBSTETRIC_IDS)
+            or s.context.get("ob_status") in ("pregnant", "postpartum"))
 
         n2 = scores.news2(v, bool(s.context.get("hypercapnic_target")))
         qs = scores.qsofa(v)
         mw = scores.mews(v)
-        cr = scores.crs(v, s.context, factors, meds, n2.total, qs.total, cfg)
+        so = scores.sofa(v, meds)
+        cci = scores.charlson(factors)
+        cr1 = scores.crs(v, s.context, factors, meds, n2.total, qs.total, cfg)
+        cr2 = scores.crs2(v, s.context, factors, meds, cci.total, cfg, ob_active)
+        uri_v1, _ = scores.composite(
+            {"news2": n2.total, "qsofa": qs.total, "mews": mw.total, "crs": cr1.total}, cfg.weights_v1(), cfg)
         uri_static, breakdown = scores.composite(
-            {"news2": n2.total, "qsofa": qs.total, "mews": mw.total, "crs": cr.total}, cfg)
+            {"news2": n2.total, "sofa": so.total, "crs2": cr2.total}, cfg.weights_v2, cfg)
 
         # Histories the trend detectors look back over.
-        s.news2_hist.add(at, n2.total)
+        s.news2_hist.add(at, dict(n2.components))
+        s.sofa_hist.add(at, dict(so.components))
         m = scores.mean_arterial(v)
         if m is not None:
             # Key MAP by the time of the BP reading, not the recompute time.
             bp = s.series.get("map") or s.series.get("sbp")
-            s.map_hist.add(bp.latest(at)[0] if bp and bp.latest(at) else at, m)
-        map_points = [(t, x) for t, x in s.map_hist.window(at - timedelta(hours=4), at)]
+            last_bp = bp.latest(at) if bp else None
+            s.map_hist.add(last_bp[0] if last_bp else at, m)
+        map_points = s.map_hist.window(at - timedelta(hours=4), at)
 
-        traj_points, signals = trends.trajectory(s.series, s.news2_hist, map_points, at, cfg, ob_active)
+        traj_points, signals = trends.trajectory(s.series, s.news2_hist, s.sofa_hist, map_points, v,
+                                                 at, cfg, ob_active)
         traj_norm = min(1.0, traj_points / cfg.trajectory_cap)
-        uri = round(min(100.0, uri_static + cfg.trajectory_weight * traj_norm), 1)
+        sofa_rise = trends.component_rise(s.sofa_hist, at, timedelta(hours=48))
+        floor, floor_reason = scores.floor(n2, sofa_rise, v, meds)
+        uri = round(max(floor, min(100.0, uri_static + cfg.trajectory_weight * traj_norm)), 1)
 
         signal_ids = {x.id for x in signals}
         cause_list = causes.evaluate(causes.Facts(v, factors, meds, signal_ids, qs.total, ob_active))
 
+        sofa_d = so.to_dict()
+        sofa_d["rise_48h"] = sofa_rise
         snap = {
             "patient_id": s.patient_id,
             "time": at.isoformat(),
             "uri": uri,
             "band": scores.band(uri),
             "uri_static": uri_static,
-            "band_static": scores.band(uri_static),
+            "uri_v1": uri_v1,
+            "floor": {"value": floor, "reason": floor_reason},
             "components": breakdown,
-            "scores": {"news2": n2.to_dict(), "qsofa": qs.to_dict(), "mews": mw.to_dict(), "crs": cr.to_dict()},
+            "scores": {"news2": n2.to_dict(), "qsofa": qs.to_dict(), "mews": mw.to_dict(),
+                       "sofa": sofa_d, "charlson": cci.to_dict(), "crs": cr1.to_dict(), "crs2": cr2.to_dict()},
             "trajectory": {"points": traj_points, "normalized": round(traj_norm, 3),
                            "added": round(cfg.trajectory_weight * traj_norm, 1),
                            "signals": [x.to_dict() for x in signals]},
-            "time_windows": scores.time_windows(uri, cfg),
+            "context": {k: s.context.get(k) for k in ("age", "cfs")},
             "correctable_causes": cause_list,
-            "obstetric": self._obstetric(factors, ob_active),
             "risk_factors": sorted(
                 ({"id": f, "label": ALL[f].label, "domain": ALL[f].domain, "status": ALL[f].status,
-                  "crs_points": ALL[f].crs_points, "odds_ratio": ALL[f].odds_ratio,
                   "source": (s.factors.get(f) or s.meds.get(f))["source"]}
                  for f in (factors | meds) if f in ALL),
                 key=lambda x: x["id"]),
             "data_quality": {"stale": stale,
-                             "missing_core": sorted(set(n2.missing) | set(cr.missing))},
+                             "missing_core": sorted(set(n2.missing) | set(so.missing) | set(cr2.missing))},
         }
+        snap["time_windows"] = self._windows(snap)
+        if cfg.obstetric_module:
+            snap["obstetric"] = self._obstetric(factors, ob_active)
         snap["alerts"] = self._alerts(s, snap, at)
         s.uri_hist.add(at, uri)
         s.last = snap
         for sink in self.sinks:
             sink(snap)
         return snap
+
+    def _windows(self, snap: dict) -> list[dict]:
+        if self.model is None:
+            return [{**w, "calibrated": False} for w in scores.time_windows(snap["uri"], self.cfg)]
+        probs = self.model.predict(snap)
+        out = []
+        for h in HORIZONS_H:
+            pct = round(100 * probs[f"{h}h"], 1)
+            out.append({"window": f"within {h}h", "estimate_pct": pct,
+                        "level": scores.window_level(pct), "calibrated": True})
+        return out
 
     def _obstetric(self, factors: set[str], active: bool) -> dict:
         present = [f for f in OBSTETRIC if f.id in factors]

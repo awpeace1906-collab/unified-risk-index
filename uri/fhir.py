@@ -155,7 +155,8 @@ class FhirAdapter:
         else:
             return []
         if param == "o2_flow":  # any O2 flow means supplemental oxygen
-            return [Event(pid, t, MEASUREMENT, "o2_supplemental", float(value) > 0, source=src)]
+            return [Event(pid, t, MEASUREMENT, "o2_flow", float(value), source=src),
+                    Event(pid, t, MEASUREMENT, "o2_supplemental", float(value) > 0, source=src)]
         return [Event(pid, t, MEASUREMENT, param, value, source=src)]
 
     def _condition(self, r: dict) -> list[Event]:
