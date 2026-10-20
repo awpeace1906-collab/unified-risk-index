@@ -99,16 +99,17 @@ def lactate_trend(lactate: Series, at: datetime) -> Signal | None:
 
 
 def hgb_drop(hgb: Series, at: datetime, baseline: float | None = None) -> Signal | None:
-    """Fall within 24 h, or (with a pre-episode baseline) below the patient's
-    usual value, which catches bleeding already under way at arrival."""
-    pts = _num(hgb, at, 24 * H)
+    """Fall within 36 h (wide enough to compare q24h ICU draws), or (with a
+    pre-episode baseline) below the patient's usual value, which catches
+    bleeding already under way at arrival."""
+    pts = _num(hgb, at, 36 * H)
     if not pts:
         return None
     best = None
     if len(pts) >= 2:
         drop = max(x for _, x in pts) - pts[-1][1]
         if drop >= 1:
-            best = Signal("hgb_drop", 3 if drop >= 2 else 1, f"Hgb down {drop:.1f} g/dL in 24 h")
+            best = Signal("hgb_drop", 3 if drop >= 2 else 1, f"Hgb down {drop:.1f} g/dL in 36 h")
     if baseline is not None:
         below = baseline - pts[-1][1]
         if below >= 2 and (best is None or best.points < (3 if below >= 3 else 2)):

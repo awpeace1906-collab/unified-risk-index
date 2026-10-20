@@ -45,7 +45,8 @@
     "vital": 2,
     "lab": 24
   },
-  "episode_gap_hours": 24.0,
+  "episode_gap_hours": 36.0,
+  "labs_hold_through_episode": true,
   "baseline_lookback_days": 365,
   "sofa_acute_in_composite": true,
   "troponin_url_ng_l": 14.0,

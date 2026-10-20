@@ -58,13 +58,21 @@ class Config:
     rapid_rise_window_min: int = 60
 
     # How long a value is used for scoring, and when it is reported as stale.
+    # Labs are used for the whole current episode (see labs_hold_through_episode);
+    # "lab" here only applies when that is switched off.
     usable_hours: dict = field(default_factory=lambda: {"vital": 12, "lab": 48})
     fresh_hours: dict = field(default_factory=lambda: {"vital": 2, "lab": 24})
 
     # --- Episodes and baselines ------------------------------------------
-    # A gap longer than this between measurements starts a new episode;
-    # results before the episode form the patient's baseline (uri.baseline).
-    episode_gap_hours: float = 24.0
+    # A gap longer than this in the patient's results *as a whole* (any lab,
+    # vital or other measurement) starts a new episode; results before the
+    # episode form the patient's baseline (uri.baseline). 36 h so q24h ICU lab
+    # schedules never split a continuous stay.
+    episode_gap_hours: float = 36.0
+    # A lab's latest value stays in use for the whole current episode, however
+    # long ago it was drawn (reported as stale after fresh_hours["lab"]); a
+    # lab from a previous episode is never used as a current value.
+    labs_hold_through_episode: bool = True
     baseline_lookback_days: int = 365
     # Score SOFA in the composite as acute change above the pre-episode
     # baseline (Sepsis-3), so chronic organ dysfunction is not counted as new.

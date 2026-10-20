@@ -208,11 +208,25 @@ class Engine:
 
     # -- scoring -----------------------------------------------------------
 
-    def _current_values(self, s: PatientState, at: datetime) -> tuple[dict, list]:
+    def _current_values(self, s: PatientState, at: datetime, start: datetime | None) -> tuple[dict, list]:
         values, stale = {}, []
+        hold = self.cfg.labs_hold_through_episode and start is not None
+        if hold:
+            # Once results of any kind stop for longer than the episode gap
+            # (e.g. after discharge), the episode is over: labs age out normally.
+            i = bisect.bisect_right(s.measure_times, at) - 1
+            hold = i >= 0 and at - s.measure_times[i] <= timedelta(hours=self.cfg.episode_gap_hours)
         for param, (category, _) in PARAMETERS.items():
             series = s.series.get(param)
-            point = series.latest(at, self.cfg.usable(category)) if series else None
+            if series is None:
+                continue
+            if category == "lab" and hold:
+                # Usable for the whole current episode, never from an earlier one.
+                point = series.latest(at)
+                if point is not None and point[0] < start:
+                    point = None
+            else:
+                point = series.latest(at, self.cfg.usable(category))
             if point is None:
                 continue
             t, value = point
@@ -223,7 +237,9 @@ class Engine:
 
     def _recompute(self, s: PatientState, at: datetime) -> dict:
         cfg = self.cfg
-        v, stale = self._current_values(s, at)
+        gap = timedelta(hours=cfg.episode_gap_hours)
+        start = s.episode_start(at, gap)
+        v, stale = self._current_values(s, at, start)
         factors, meds = s.active_factors(), s.active_meds()
         factors |= s.derived_factors(at, factors)
         n_pressors = s.n_pressors()
@@ -233,8 +249,7 @@ class Engine:
         qs = scores.qsofa(v)
         mw = scores.mews(v)
         so = scores.sofa(v, meds, n_pressors)
-        gap = timedelta(hours=cfg.episode_gap_hours)
-        base = baselines.compute(s.series, s.episode_start(at, gap), cfg.baseline_lookback_days)
+        base = baselines.compute(s.series, start, cfg.baseline_lookback_days)
         base_sofa = base.get("sofa", {"components": {}, "total": 0, "known": False})
         sofa_acute = scores.acute_sofa(so.components, base_sofa["components"])
         pad = scores.padua(factors, s.context.get("age"))

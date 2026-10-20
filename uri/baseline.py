@@ -8,9 +8,11 @@ and one whose usual value is 9.
 
 Episode. The current episode starts at the earliest measurement reached by
 walking back from the latest one without crossing a gap longer than
-``episode_gap_hours``. Results from earlier encounters (pulled at arrival by
-uri.history, or included in a replayed export) fall before that and form the
-baseline.
+``episode_gap_hours`` (36 h). The gap is measured across all of the
+patient's results together: a lab not repeated for 72 h does not split the
+visit while other results keep arriving. Results from earlier encounters
+(pulled at arrival by uri.history, or included in a replayed export) fall
+before that and form the baseline.
 
 Baselines (looking back ``baseline_lookback_days`` from the episode start):
   creatinine   lowest value in the 7 days before the episode, else the median

@@ -225,3 +225,44 @@ class CalibrateEpisodeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContinuousVisitTest(unittest.TestCase):
+    """The visit is continuous across the patient's results as a whole."""
+
+    def test_single_lab_not_repeated_for_72h_stays_in_the_visit(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [lab("p", T0, "lactate", 3.1)])
+        for h in range(4, 76, 4):  # vitals keep streaming every 4 h; lactate never repeated
+            snap = e.ingest_many(vitals("p", T0 + h * H))["p"]
+        self.assertEqual(snap["episode_start"], T0.isoformat())  # one continuous visit
+        self.assertEqual(snap["scores"]["crs2"]["components"]["metabolic"], 2)  # 72 h-old lactate still used
+        stale = {x["parameter"]: x["age_min"] for x in snap["data_quality"]["stale"]}
+        self.assertEqual(stale["lactate"], 72 * 60)  # but reported as stale
+
+    def test_q24h_icu_labs_alone_do_not_split_the_visit(self):
+        e = Engine()
+        for d in range(4):  # labs only, every 24-30 h
+            snap = e.ingest_many([lab("p", T0 + d * 30 * H, "creatinine", 1.0 + 0.1 * d)])["p"]
+        self.assertEqual(snap["episode_start"], T0.isoformat())
+
+    def test_gap_over_36h_starts_a_new_visit_and_old_labs_become_baseline(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [lab("p", T0, "lactate", 3.1), lab("p", T0, "hgb", 13.0)])
+        snap = e.ingest_many(vitals("p", T0 + 40 * H))["p"]
+        self.assertEqual(snap["episode_start"], (T0 + 40 * H).isoformat())
+        self.assertEqual(snap["scores"]["crs2"]["components"]["metabolic"], 0)  # prior visit's lactate not current
+        self.assertEqual(snap["baseline"]["hgb"]["value"], 13.0)
+
+    def test_hgb_drop_between_q24h_draws(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [lab("p", T0, "hgb", 11.5)])
+        snap = e.ingest_many(vitals("p", T0 + 26 * H) + [lab("p", T0 + 26 * H, "hgb", 9.2)])["p"]
+        self.assertIn("hgb_drop", signal_ids(snap))
+
+    def test_labs_age_out_after_the_visit_ends(self):
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [lab("p", T0, "lactate", 3.1)])
+        e.ingest_many(vitals("p", T0 + 10 * H))
+        snap = e.tick(T0 + 60 * H)["p"]  # no results for 50 h: visit over, 60 h-old lactate expired
+        self.assertEqual(snap["scores"]["crs2"]["components"]["metabolic"], 0)

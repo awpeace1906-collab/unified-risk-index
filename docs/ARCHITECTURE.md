@@ -96,7 +96,7 @@ does not fire `sofa_rise`.
 | `shock_index` | HR/SBP ≥ 1.0; +1 if up ≥ 0.2 over 4 h | 2–3 |
 | `map_low_sustained` | MAP < 65 on two readings ≥ 15 min apart | 2 |
 | `lactate_rising` / `lactate_not_clearing` | rising and ≥ 2, or < 10% clearance from ≥ 2, in 12 h | 2 / 1 |
-| `hgb_drop` | ≥ 2 (≥ 1) g/dL below its 24 h maximum | 3 (1) |
+| `hgb_drop` | ≥ 2 (≥ 1) g/dL below its 36 h maximum (spans q24h draws), or ≥ 2 (≥ 3) below the pre-episode baseline | 3 (1); 2 (3) |
 | `aki` | creatinine +0.3 mg/dL in 48 h or ≥ 1.5× its 7 d minimum (KDIGO) | 2 |
 | `troponin_rising` | above URL and ≥ 20% rise in 12 h | 2 |
 | `oxygenation_decline` | SpO₂ down ≥ 4 in 2 h, new O₂, or FiO₂ +10% in 4 h | 2 |
@@ -196,8 +196,11 @@ an export that already contains prior results gives the same result without
 any pull.
 
 **Episodes.** The current episode starts at the earliest measurement reached
-by walking back from the latest one without crossing a gap longer than 24 h
-(`episode_gap_hours`). Results before it form the baseline. Outcomes count
+by walking back from the latest one without crossing a gap longer than 36 h
+(`episode_gap_hours`). The gap is measured across all of the patient's
+results together, not per test. A lab not repeated for 72 h does not split
+the visit while other results keep arriving, and q24h ICU labs alone never
+split it. Results before the episode form the baseline. Outcomes count
 only inside the current episode, so a prior admission's ICU stay pulled in
 with the history is not an outcome. Calibration rows come from each
 patient's latest episode.
@@ -235,8 +238,12 @@ patient's latest episode.
   type); `--as-is` keeps file order.
 * **Out-of-order data.** Series are ordered by observation time, and the
   clock never moves back, so late labs land in the right place in the trend.
-* **Ageing.** Values are used for 12 h (vitals) or 48 h (labs) and reported
-  as stale after 2 h or 24 h. `Engine.tick(now)` recomputes without new data.
+* **Ageing.** Vitals are used for 12 h. A lab's latest value is used for
+  the whole current episode, however long ago it was drawn, but never from a
+  previous episode (`labs_hold_through_episode`). Once results of any kind
+  stop for more than 36 h, the episode is over and labs age out after 48 h.
+  Values are reported as stale after 2 h (vitals) or 24 h (labs).
+  `Engine.tick(now)` recomputes without new data.
 * **Missing data** scores 0 and is listed in `data_quality.missing_core`.
   The model also sees how much of SOFA was measured.
 * **Alerts** (band escalation, a rise of ≥ 10 in 60 min, a new correctable
