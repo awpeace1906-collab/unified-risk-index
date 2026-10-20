@@ -20,7 +20,7 @@ from typing import Callable, Iterable
 import bisect
 
 from . import baseline as baselines
-from . import causes, labs, scores, trends
+from . import causes, labs, scores, staleness, trends
 from .config import Config
 from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, PARAMETERS, Event, parse_time
 from .model import HORIZONS_H, Model
@@ -31,7 +31,14 @@ DATED_CONTEXT = {"last_surgery", "last_inpatient_discharge"}
 # Outcomes stamped this long before the first measurement still count (arrival
 # vs first-charting skew); anything earlier is history, not an outcome.
 OUTCOME_TOLERANCE = timedelta(hours=1)
-from .series import Series
+# Encounters this close together are one visit (ED discharge -> admission).
+ENCOUNTER_JOIN = timedelta(hours=1)
+# Results charted this long before registration (triage vitals) belong to the visit.
+ARRIVAL_TOLERANCE = timedelta(hours=1)
+# "Hours since measured" model features are capped here (and set here when never measured).
+HOURS_SINCE_CAP = 72.0
+
+from .series import Series  # noqa: E402
 
 Sink = Callable[[dict], None]
 
@@ -50,6 +57,7 @@ class PatientState:
         self.pressor_hist = Series()
         self.outcomes: dict[str, list[datetime]] = {}  # type -> every occurrence
         self.measure_times: list[datetime] = []  # sorted, distinct
+        self.encounters: dict[str, dict] = {}    # acute-care encounters (ED, observation, inpatient)
         self.clock: datetime | None = None
         self.last: dict | None = None
 
@@ -71,7 +79,9 @@ class PatientState:
             if i == len(self.measure_times) or self.measure_times[i] != e.time:
                 self.measure_times.insert(i, e.time)
         elif e.kind == CONTEXT:
-            if e.code in DATED_CONTEXT:  # keep the most recent date
+            if e.code == "encounter":  # later updates (e.g. the end time) replace earlier ones
+                self.encounters[e.value.get("id") or e.value["start"]] = e.value
+            elif e.code in DATED_CONTEXT:  # keep the most recent date
                 t = parse_time(e.value)
                 old = self.context.get(e.code)
                 self.context[e.code] = t if old is None or t > old else old
@@ -89,13 +99,44 @@ class PatientState:
         if t not in times:
             bisect.insort(times, t)
 
+    def visits(self) -> list[tuple[datetime, datetime | None]]:
+        """Acute-care encounters merged into visits: an ED encounter and the
+        admission that follows it (within ENCOUNTER_JOIN) are one visit."""
+        intervals = sorted((parse_time(v["start"]), parse_time(v["end"]) if v.get("end") else None)
+                           for v in self.encounters.values())
+        chains: list[tuple[datetime, datetime | None]] = []
+        for s, e in intervals:
+            if chains and (chains[-1][1] is None or s <= chains[-1][1] + ENCOUNTER_JOIN):
+                ps, pe = chains[-1]
+                chains[-1] = (ps, None if pe is None or e is None else max(pe, e))
+            else:
+                chains.append((s, e))
+        return chains
+
+    def episode(self, at: datetime, gap: timedelta) -> tuple[datetime | None, bool, str]:
+        """(start of the current visit, is it still open, how it was determined).
+
+        Primary: the EHR's encounter record. Fallback, when no encounter covers
+        ``at``: the results-gap rule (no result of any kind for > ``gap``)."""
+        for s, e in reversed(self.visits()):
+            if s - ARRIVAL_TOLERANCE <= at:
+                if e is None or at <= e:
+                    return s - ARRIVAL_TOLERANCE, True, "encounter"
+                if at - e <= gap:
+                    return s - ARRIVAL_TOLERANCE, False, "encounter (discharged)"
+                break
+        start = baselines.episode_start(self.measure_times, at, gap)
+        i = bisect.bisect_right(self.measure_times, at) - 1
+        open_ = start is not None and i >= 0 and at - self.measure_times[i] <= gap
+        return start, open_, "results gap (no encounter data)"
+
     def episode_start(self, at: datetime, gap: timedelta) -> datetime | None:
-        return baselines.episode_start(self.measure_times, at, gap)
+        return self.episode(at, gap)[0]
 
     def observed_outcomes(self, gap: timedelta, at: datetime | None = None) -> dict[str, datetime]:
-        """Outcomes in the current episode (from its first measurement), up to
-        ``at``. Earlier ones (a prior admission's ICU stay pulled in with the
-        patient's history) are history, not outcomes."""
+        """Outcomes in the current visit, up to ``at``. Earlier ones (a prior
+        admission's ICU stay pulled in with the patient's history) are
+        history, not outcomes."""
         ref = at or self.clock
         start = self.episode_start(ref, gap) if ref else None
         if start is None:
@@ -208,20 +249,18 @@ class Engine:
 
     # -- scoring -----------------------------------------------------------
 
-    def _current_values(self, s: PatientState, at: datetime, start: datetime | None) -> tuple[dict, list]:
-        values, stale = {}, []
-        hold = self.cfg.labs_hold_through_episode and start is not None
-        if hold:
-            # Once results of any kind stop for longer than the episode gap
-            # (e.g. after discharge), the episode is over: labs age out normally.
-            i = bisect.bisect_right(s.measure_times, at) - 1
-            hold = i >= 0 and at - s.measure_times[i] <= timedelta(hours=self.cfg.episode_gap_hours)
+    def _current_values(self, s: PatientState, at: datetime, start: datetime | None,
+                        visit_open: bool) -> tuple[dict, dict]:
+        """(value, time measured) per parameter. Labs are held for the whole
+        open visit and never taken from an earlier one; once the visit has
+        closed (discharge, or results stopped), they age out normally."""
+        values, times = {}, {}
+        hold = self.cfg.labs_hold_through_episode and start is not None and visit_open
         for param, (category, _) in PARAMETERS.items():
             series = s.series.get(param)
             if series is None:
                 continue
             if category == "lab" and hold:
-                # Usable for the whole current episode, never from an earlier one.
                 point = series.latest(at)
                 if point is not None and point[0] < start:
                     point = None
@@ -229,17 +268,41 @@ class Engine:
                 point = series.latest(at, self.cfg.usable(category))
             if point is None:
                 continue
-            t, value = point
-            values[param] = value
-            if at - t > self.cfg.fresh(category):
-                stale.append({"parameter": param, "age_min": int((at - t).total_seconds() // 60)})
-        return values, stale
+            times[param], values[param] = point
+        return values, times
+
+    def _staleness(self, s: PatientState, v: dict, times: dict, at: datetime, n2) -> list[dict]:
+        """Per-result windows from uri.staleness (placeholders pending PubMed
+        confirmation); vitals follow the NEWS2 monitoring frequency."""
+        dropping = trends.hgb_drop(s.series.get("hgb"), at) is not None
+        out = []
+        for param, t in times.items():
+            rule = staleness.window(param, v, n2.total if not n2.missing else None,
+                                    bool(n2.flags), dropping)
+            if rule is None:
+                continue
+            hours, why = rule
+            age = at - t
+            if age > timedelta(hours=hours):
+                out.append({"parameter": param, "age_min": int(age.total_seconds() // 60),
+                            "window_h": hours, "rule": why, "rule_status": staleness.rule_for(param).status})
+        return out
+
+    @staticmethod
+    def _hours_since(times: dict, at: datetime) -> dict:
+        def since(params):
+            ts = [times[p] for p in params if p in times]
+            if not ts:
+                return HOURS_SINCE_CAP
+            return round(min(HOURS_SINCE_CAP, (at - max(ts)).total_seconds() / 3600), 2)
+        return {"vitals": since(("hr", "rr", "sbp", "spo2")), "lactate": since(("lactate",)),
+                "hgb": since(("hgb",)), "creatinine": since(("creatinine",))}
 
     def _recompute(self, s: PatientState, at: datetime) -> dict:
         cfg = self.cfg
         gap = timedelta(hours=cfg.episode_gap_hours)
-        start = s.episode_start(at, gap)
-        v, stale = self._current_values(s, at, start)
+        start, visit_open, episode_source = s.episode(at, gap)
+        v, times = self._current_values(s, at, start, visit_open)
         factors, meds = s.active_factors(), s.active_meds()
         factors |= s.derived_factors(at, factors)
         n_pressors = s.n_pressors()
@@ -293,6 +356,8 @@ class Engine:
             "patient_id": s.patient_id,
             "time": at.isoformat(),
             "episode_start": base.get("episode_start"),
+            "visit": {"start": start.isoformat() if start else None, "open": visit_open,
+                      "determined_by": episode_source},
             "uri": uri,
             "band": scores.band(uri),
             "uri_static": uri_static,
@@ -306,6 +371,7 @@ class Engine:
                            "added": round(cfg.trajectory_weight * traj_norm, 1),
                            "signals": [x.to_dict() for x in signals]},
             "context": {"age": s.context.get("age"), "cfs": s.context.get("cfs"),
+                        "hours_since": self._hours_since(times, at),
                         "news2_spo2_scale": 2 if self._hypercapnic(s, at, factors) else 1,
                         "resp_support": v.get("resp_support"), "n_pressors": n_pressors,
                         "active_medications": len(s.active_rx())},
@@ -317,7 +383,7 @@ class Engine:
                   or f"derived: {ALL[f].derived}"}
                  for f in (factors | meds) if f in ALL),
                 key=lambda x: x["id"]),
-            "data_quality": {"stale": stale,
+            "data_quality": {"stale": self._staleness(s, v, times, at, n2),
                              "missing_core": sorted(set(n2.missing) | set(so.missing) | set(cr2.missing))},
         }
         snap["outcomes"] = [{"type": k, "time": t.isoformat()}

@@ -57,20 +57,23 @@ class Config:
     rapid_rise_points: float = 10.0
     rapid_rise_window_min: int = 60
 
-    # How long a value is used for scoring, and when it is reported as stale.
-    # Labs are used for the whole current episode (see labs_hold_through_episode);
-    # "lab" here only applies when that is switched off.
+    # How long a value is used for scoring. Labs are used for the whole open
+    # visit (labs_hold_through_episode); "lab" here applies once the visit has
+    # closed. When a value is *reported as stale* is decided per result by
+    # uri.staleness (placeholder rules pending PubMed confirmation).
     usable_hours: dict = field(default_factory=lambda: {"vital": 12, "lab": 48})
-    fresh_hours: dict = field(default_factory=lambda: {"vital": 2, "lab": 24})
 
-    # --- Episodes and baselines ------------------------------------------
-    # A gap longer than this in the patient's results *as a whole* (any lab,
-    # vital or other measurement) starts a new episode; results before the
-    # episode form the patient's baseline (uri.baseline). 36 h so q24h ICU lab
-    # schedules never split a continuous stay.
+    # --- Visits (episodes) and baselines ---------------------------------
+    # The visit comes from the EHR's encounter record (ED arrival through the
+    # linked admission) when one is available. Only without encounter data
+    # does this fallback apply: a gap longer than this in the patient's results
+    # *as a whole* starts a new visit. 36 h is a judgement call (q24h ICU labs
+    # must not split a stay); Phase 1 should replace it with the empirical
+    # within-encounter gap distribution. Results before the visit form the
+    # patient's baseline (uri.baseline).
     episode_gap_hours: float = 36.0
     # A lab's latest value stays in use for the whole current episode, however
-    # long ago it was drawn (reported as stale after fresh_hours["lab"]); a
+    # long ago it was drawn (reported as stale per uri.staleness); a
     # lab from a previous episode is never used as a current value.
     labs_hold_through_episode: bool = True
     baseline_lookback_days: int = 365
@@ -103,8 +106,6 @@ class Config:
     def usable(self, category: str) -> timedelta:
         return timedelta(hours=self.usable_hours[category])
 
-    def fresh(self, category: str) -> timedelta:
-        return timedelta(hours=self.fresh_hours[category])
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":

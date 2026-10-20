@@ -215,6 +215,7 @@ authored / effective times and, for loop diuretics, the dose in mg.
 |---|---|---|
 | Emergent intubation (outcome) | Procedure | sct 112798008, cpt 31500 |
 | Recent surgery | Procedure | category 387713003 (surgical procedure), performed date |
+| Visit boundaries | Encounter | class ACUTE/EMER/IMP/NONAC/OBSENC, status, period.start / period.end (ED arrival through the linked admission) |
 | Recent hospitalization | Encounter | class ACUTE/IMP/NONAC, status finished, period.end |
 | ICU transfer (outcome) | Encounter.location | location display matching: icu, intensive care, critical care, micu, sicu, ccu, cvicu; location period.start |
 | Vasopressor start (outcome) | MedicationAdministration | first administration of norepinephrine, epinephrine, vasopressin, phenylephrine, dopamine, angiotensin ii |

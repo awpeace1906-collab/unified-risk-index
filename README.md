@@ -88,6 +88,7 @@ data, and alerts.
 
 * [docs/PHASE0.md](docs/PHASE0.md): event-rate audit protocol, sample sizes, and revisions the proposal needs
 * [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): the Phase 1 extraction specification (generated)
+* [docs/STALENESS_RULES.md](docs/STALENESS_RULES.md): per-result staleness windows, **placeholders awaiting PubMed confirmation** (generated)
 * [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the index formula, trajectory signals, streaming behaviour, and how this fits the Phase 1–4 research plan
 * [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry and its coverage of the v1 panels
@@ -107,6 +108,7 @@ uri/
   labs.py       v1 critical / flag thresholds
   engine.py     per-patient state, recompute, alerts, sinks
   baseline.py   episodes and pre-episode baselines
+  staleness.py  per-result staleness rules (unverified placeholders)
   history.py    arrival-time FHIR history pull
   model.py      feature definition + fitted-model scoring
   calibrate.py  per-horizon logistic fit, bootstrap validation (numpy)

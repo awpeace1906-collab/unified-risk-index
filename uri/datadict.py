@@ -111,6 +111,8 @@ def render() -> str:
     w("| Emergent intubation (outcome) | Procedure | "
       + ", ".join(f"{s.rsplit('/', 1)[-1]} {c}" for s, c in sorted(fhir.INTUBATION_CODES)) + " |")
     w(f"| Recent surgery | Procedure | category {fhir.SURGICAL_CATEGORY[1]} (surgical procedure), performed date |")
+    w("| Visit boundaries | Encounter | class " + "/".join(sorted(fhir.VISIT_CLASSES))
+      + ", status, period.start / period.end (ED arrival through the linked admission) |")
     w("| Recent hospitalization | Encounter | class " + "/".join(sorted(fhir.INPATIENT_CLASSES))
       + ", status finished, period.end |")
     w("| ICU transfer (outcome) | Encounter.location | location display matching: "

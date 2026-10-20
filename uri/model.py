@@ -17,6 +17,7 @@ HORIZONS_H = (6, 12, 24, 36, 48)
 FEATURES = (
     "news2", "qsofa", "mews", "sofa", "sofa_rise", "crs", "crs2", "charlson",
     "trajectory", "age", "organs_measured", "critical_values", "resp_support", "n_pressors", "sofa_acute",
+    "hours_since_vitals", "hours_since_lactate", "hours_since_hgb", "hours_since_creatinine",
 )
 
 
@@ -43,6 +44,11 @@ def features(snap: dict) -> dict:
         "n_pressors": snap.get("context", {}).get("n_pressors") or 0,
         # organ dysfunction above the patient's own pre-episode baseline (Sepsis-3)
         "sofa_acute": sc["sofa"].get("acute", sc["sofa"]["total"]),
+        # How old the latest value is (capped at 72 h; 72 when never measured):
+        # lets calibration learn how much an older result still predicts,
+        # instead of relying only on the fixed staleness windows.
+        **{f"hours_since_{k}": snap.get("context", {}).get("hours_since", {}).get(k, 72.0)
+           for k in ("vitals", "lactate", "hgb", "creatinine")},
     }
 
 

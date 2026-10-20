@@ -195,12 +195,23 @@ failed query is recorded and skipped, and scoring never waits on it. Replaying
 an export that already contains prior results gives the same result without
 any pull.
 
-**Episodes.** The current episode starts at the earliest measurement reached
-by walking back from the latest one without crossing a gap longer than 36 h
-(`episode_gap_hours`). The gap is measured across all of the patient's
-results together, not per test. A lab not repeated for 72 h does not split
-the visit while other results keep arriving, and q24h ICU labs alone never
-split it. Results before the episode form the baseline. Outcomes count
+**Visits (episodes).**
+
+* **Primary: the EHR's encounter record.** ED, observation and inpatient
+  encounters (FHIR `Encounter`, from ADT) are merged into one visit when they
+  follow each other within 1 h (ED discharge → admission). The visit starts
+  at arrival (minus 1 h for triage charted before registration) and closes
+  at discharge. A long pause in charting mid-stay does not split it, and
+  clinic results drawn before arrival are baseline.
+* **Fallback, with no encounter data:** the visit starts after the last gap
+  of more than 36 h (`episode_gap_hours`) in the patient's results as a
+  whole, not per test. A lab not repeated for 72 h does not split it while
+  other results keep arriving, and q24h ICU labs alone never split it. The
+  36 h is a judgement call that Phase 1 should replace with the empirical
+  within-encounter gap distribution.
+
+Each snapshot reports `visit.start`, `visit.open` and `visit.determined_by`.
+Results before the visit form the baseline. Outcomes count
 only inside the current episode, so a prior admission's ICU stay pulled in
 with the history is not an outcome. Calibration rows come from each
 patient's latest episode.
@@ -239,11 +250,23 @@ patient's latest episode.
 * **Out-of-order data.** Series are ordered by observation time, and the
   clock never moves back, so late labs land in the right place in the trend.
 * **Ageing.** Vitals are used for 12 h. A lab's latest value is used for
-  the whole current episode, however long ago it was drawn, but never from a
-  previous episode (`labs_hold_through_episode`). Once results of any kind
-  stop for more than 36 h, the episode is over and labs age out after 48 h.
-  Values are reported as stale after 2 h (vitals) or 24 h (labs).
-  `Engine.tick(now)` recomputes without new data.
+  the whole open visit, however long ago it was drawn, but never from a
+  previous visit (`labs_hold_through_episode`). Once the visit closes
+  (discharge, or results stopping for more than 36 h without encounter
+  data), labs age out after 48 h. `Engine.tick(now)` recomputes without new
+  data.
+* **Staleness** is decided per result (`uri/staleness.py`,
+  [STALENESS_RULES.md](STALENESS_RULES.md)):
+  * vitals follow the NEWS2 minimum monitoring frequency (12 h at NEWS2 0
+    down to 30 min at ≥ 7);
+  * lactate is 4 h when > 2 mmol/L;
+  * troponin 6 h; blood gases and glucose 6 h; electrolytes 12 h;
+  * SOFA labs 24 h; Hgb 24 h, or 6 h while falling; BNP and procalcitonin 48 h.
+
+  **All of these windows are placeholders pending PubMed confirmation.**
+  Each stale entry carries its window, the reason and `rule_status`.
+  "Hours since measured" for vitals, lactate, Hgb and creatinine are model
+  features, so Phase 1 calibration can test the windows against outcomes.
 * **Missing data** scores 0 and is listed in `data_quality.missing_core`.
   The model also sees how much of SOFA was measured.
 * **Alerts** (band escalation, a rise of ≥ 10 in 60 min, a new correctable

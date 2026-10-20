@@ -41,10 +41,6 @@
     "vital": 12,
     "lab": 48
   },
-  "fresh_hours": {
-    "vital": 2,
-    "lab": 24
-  },
   "episode_gap_hours": 36.0,
   "labs_hold_through_episode": true,
   "baseline_lookback_days": 365,
