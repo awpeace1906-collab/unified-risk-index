@@ -39,6 +39,11 @@ python -m uri replay feed.ndjson --log snapshots.jsonl --outcomes-out outcomes.c
 python -m uri serve --port 8080 --log shadow.jsonl   # receive FHIR pushes
 python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv --bootstrap 200 --out model.json
 python -m unittest discover -s tests -t .
+
+# Phase 0 (see docs/PHASE0.md)
+python -m uri.audit data/phase0_audit.csv          # event rates + decision rule + sample sizes
+python -m uri.samplesize --event-rate 0.06         # Riley criteria, derivation and validation
+python -m uri.datadict > docs/DATA_DICTIONARY.md   # Phase 1 EHR extraction spec
 ```
 
 Demo output (abridged). In the occult GI bleed, the trend lifts the index
@@ -76,6 +81,8 @@ data, and alerts.
 
 ## Docs
 
+* [docs/PHASE0.md](docs/PHASE0.md): event-rate audit protocol, sample sizes, and revisions the proposal needs
+* [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): the Phase 1 extraction specification (generated)
 * [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the index formula, trajectory signals, streaming behaviour, and how this fits the Phase 1–4 research plan
 * [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry and its coverage of the v1 panels
@@ -99,5 +106,9 @@ uri/
   server.py     HTTP receiver (stdlib)
   simulate.py   synthetic FHIR scenarios
   config.py     every weight / threshold, JSON-overridable
+  audit.py      Phase 0 event-rate audit
+  samplesize.py Riley sample-size criteria
+  datadict.py   generates docs/DATA_DICTIONARY.md
 examples/       config.json and the demo FHIR feed
+templates/      Phase 0 chart-abstraction sheet
 ```
