@@ -176,8 +176,63 @@ python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv \
   URI v1 and uncalibrated URI v2 at the same landmarks.
 * Encounter end times censor rows whose follow-up ends before the horizon.
 
+## Arrival-time history and baselines (`uri/history.py`, `uri/baseline.py`)
+
+A live feed only carries what happens from now on. With
+`python -m uri serve --history-url <FHIR base>`, the first time a patient
+appears their prior results are fetched from the EHR's FHIR API. The bearer
+token is read from `URI_FHIR_TOKEN`, never from the command line. The pull
+fetches:
+
+* 12 months of creatinine, hemoglobin, platelets, bilirubin and pCO₂;
+* labs and vitals from the last 48 h;
+* the problem list and active medications;
+* encounters (90 d) and procedures (30 d);
+* demographics and advance directives.
+
+History is preloaded without emitting snapshots. The pull is best effort: a
+failed query is recorded and skipped, and scoring never waits on it. Replaying
+an export that already contains prior results gives the same result without
+any pull.
+
+**Episodes.** The current episode starts at the earliest measurement reached
+by walking back from the latest one without crossing a gap longer than 24 h
+(`episode_gap_hours`). Results before it form the baseline. Outcomes count
+only inside the current episode, so a prior admission's ICU stay pulled in
+with the history is not an outcome. Calibration rows come from each
+patient's latest episode.
+
+**Baselines** (looking back 365 days from the episode start):
+
+| Item | Baseline |
+|---|---|
+| Creatinine | Lowest value in the 7 days before the episode, else the median of days 8–365 |
+| Hemoglobin, platelets, bilirubin | Median of prior values |
+| SOFA | Coagulation, liver and renal points of those baselines; respiratory, cardiovascular and CNS taken as 0 |
+
+**What uses them:**
+
+* **SOFA in the composite** is the acute change above baseline, per organ
+  (Sepsis-3). A CKD patient at their usual creatinine is not scored as new
+  renal failure; chronic burden is carried by Charlson. With no prior results
+  the baseline is assumed 0, the Sepsis-3 convention. The snapshot reports
+  total, baseline and acute SOFA.
+* **`sofa_rise`** also fires when acute SOFA ≥ 2 above a known baseline,
+  which catches organ dysfunction already present at arrival. The escalation
+  floor uses the same rule.
+* **`aki`** is staged per KDIGO against the baseline from a single arrival
+  value: ≥ 1.5× is stage 1, ≥ 2× stage 2, ≥ 3× or ≥ 4.0 mg/dL stage 3.
+  Without a baseline it falls back to the 7-day minimum.
+* **`hgb_drop`** also fires when Hgb is ≥ 2 g/dL below the patient's usual
+  value, catching bleeding already under way at arrival, while chronic anemia
+  at its usual level does not fire.
+* **Model feature** `sofa_acute`.
+
 ## Streaming behaviour
 
+* **Replay order.** `python -m uri replay` sorts the whole export by
+  clinical time before feeding it (FHIR bulk exports are grouped by resource
+  type); `--as-is` keeps file order.
 * **Out-of-order data.** Series are ordered by observation time, and the
   clock never moves back, so late labs land in the right place in the trend.
 * **Ageing.** Values are used for 12 h (vitals) or 48 h (labs) and reported
@@ -191,7 +246,8 @@ python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv \
 
 * HL7v2 ORU/ADT adapter
 * Planned vs unplanned ICU transfer; ICU orders at triage / immediate OR transfer exclusions
-* Prior-encounter baselines (creatinine, Hgb, SOFA) fetched at arrival
+* Baselines for vitals (e.g. usual blood pressure in chronic hypertension) and for respiratory / CNS SOFA
+* SMART backend-services token acquisition for the history pull (site-specific)
 * Vasopressor doses (mcg/kg/min) for exact SOFA cardiovascular; urine output for KDIGO/SOFA
 * Infusion stop times: a completed MedicationAdministration currently stays "active"
 * Retraction of results sent `entered-in-error` after ingestion

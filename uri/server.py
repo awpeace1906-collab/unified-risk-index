@@ -6,6 +6,10 @@
   GET  /patients/{id}         latest full snapshot
   GET  /patients/{id}/history URI time series
 
+With a FhirHistory configured, the first time a patient appears their prior
+results are pulled from the EHR's FHIR API (uri.history) and preloaded, so
+baselines and trends start from the patient's history rather than empty.
+
 Standard library only. This has no authentication or TLS and is meant to sit
 behind the institution's interface engine on a private network (shadow mode).
 Do not expose it directly.
@@ -15,15 +19,33 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .engine import Engine
-from .events import Event
+from .events import EPOCH, Event
 from .fhir import FhirAdapter
+from .history import FhirHistory
 
 
-def make_handler(engine: Engine, adapter: FhirAdapter):
+def make_handler(engine: Engine, adapter: FhirAdapter, history: FhirHistory | None = None):
     lock = threading.Lock()
+    pulled: set[str] = set()
+
+    def pull_history(events: list[Event]) -> None:
+        """Preload prior history for patients seen for the first time. The
+        FHIR queries run outside the lock so other requests are not blocked."""
+        with lock:
+            new = {e.patient_id for e in events} - set(engine.patients) - pulled
+            pulled.update(new)
+        if not new:
+            return
+        at = max((e.time for e in events if e.time > EPOCH), default=datetime.now(timezone.utc))
+        for pid in sorted(new):
+            resources = history.resources(pid, at)
+            prior = adapter.events({"resourceType": "Bundle", "entry": [{"resource": r} for r in resources]})
+            with lock:
+                engine.preload(prior)
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status: int, body) -> None:
@@ -46,6 +68,8 @@ def make_handler(engine: Engine, adapter: FhirAdapter):
                     return self._send(404, {"error": "not found"})
             except (ValueError, KeyError, TypeError) as exc:
                 return self._send(400, {"error": str(exc)})
+            if history is not None:
+                pull_history(events)
             with lock:
                 snaps = engine.ingest_many(events)
             self._send(202, {"events": len(events), "snapshots": list(snaps.values())})
@@ -71,5 +95,6 @@ def make_handler(engine: Engine, adapter: FhirAdapter):
     return Handler
 
 
-def serve(engine: Engine, adapter: FhirAdapter, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(engine, adapter))
+def serve(engine: Engine, adapter: FhirAdapter, host: str = "127.0.0.1", port: int = 8080,
+          history: FhirHistory | None = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(engine, adapter, history))

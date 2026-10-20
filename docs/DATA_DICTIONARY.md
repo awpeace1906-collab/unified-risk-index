@@ -14,8 +14,12 @@ This is the specification for the retrospective export the Phase 1 derivation re
 * **Resources:** `Patient`, `Encounter`, `Observation` (vital-signs and laboratory),
   `Condition` (problem list and encounter diagnoses), `MedicationRequest`,
   `MedicationStatement`, `MedicationAdministration`, `Procedure`, `Consent`.
-* **Window:** from 90 days before each ED arrival (recent hospitalization, recent surgery,
-  baselines) to 48 h after it (outcomes).
+* **Window:** from 365 days before each ED arrival for creatinine, hemoglobin, platelets,
+  bilirubin and pCO2 (pre-episode baselines), 90 days for encounters and procedures (recent
+  hospitalization / surgery), to 48 h after arrival (outcomes).
+* **Units of analysis:** one ED encounter per subject id. A patient with several ED
+  encounters in the period should appear once per encounter (e.g. `patientid-encounterid`),
+  because outcomes and calibration rows are taken from each subject's latest episode.
 * **Timestamps:** observation/effective times, not result-filed times, wherever both exist.
 * **De-identification:** shift dates consistently per patient if required; intervals are all
   the engine needs.

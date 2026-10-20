@@ -17,6 +17,9 @@ import re
 from datetime import datetime, timedelta
 from typing import Callable, Iterable
 
+import bisect
+
+from . import baseline as baselines
 from . import causes, labs, scores, trends
 from .config import Config
 from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, PARAMETERS, Event, parse_time
@@ -45,8 +48,8 @@ class PatientState:
         self.map_hist = Series()
         self.uri_hist = Series()
         self.pressor_hist = Series()
-        self.outcomes: dict[str, datetime] = {}  # type -> first time
-        self.first_measurement: datetime | None = None
+        self.outcomes: dict[str, list[datetime]] = {}  # type -> every occurrence
+        self.measure_times: list[datetime] = []  # sorted, distinct
         self.clock: datetime | None = None
         self.last: dict | None = None
 
@@ -64,8 +67,9 @@ class PatientState:
                 if before is not None and before[1] < 4:  # escalation to invasive ventilation
                     self._outcome("intubation", e.time)
             series.add(e.time, e.value)
-            if self.first_measurement is None or e.time < self.first_measurement:
-                self.first_measurement = e.time
+            i = bisect.bisect_left(self.measure_times, e.time)
+            if i == len(self.measure_times) or self.measure_times[i] != e.time:
+                self.measure_times.insert(i, e.time)
         elif e.kind == CONTEXT:
             if e.code in DATED_CONTEXT:  # keep the most recent date
                 t = parse_time(e.value)
@@ -81,15 +85,28 @@ class PatientState:
             self._outcome(e.code, e.time)
 
     def _outcome(self, kind: str, t: datetime) -> None:
-        if kind not in self.outcomes or t < self.outcomes[kind]:
-            self.outcomes[kind] = t
+        times = self.outcomes.setdefault(kind, [])
+        if t not in times:
+            bisect.insort(times, t)
 
-    def observed_outcomes(self, at: datetime | None = None) -> dict[str, datetime]:
-        """Outcomes at or after the index time (first measurement), up to ``at``."""
-        if self.first_measurement is None:
+    def episode_start(self, at: datetime, gap: timedelta) -> datetime | None:
+        return baselines.episode_start(self.measure_times, at, gap)
+
+    def observed_outcomes(self, gap: timedelta, at: datetime | None = None) -> dict[str, datetime]:
+        """Outcomes in the current episode (from its first measurement), up to
+        ``at``. Earlier ones (a prior admission's ICU stay pulled in with the
+        patient's history) are history, not outcomes."""
+        ref = at or self.clock
+        start = self.episode_start(ref, gap) if ref else None
+        if start is None:
             return {}
-        start = self.first_measurement - OUTCOME_TOLERANCE
-        return {k: t for k, t in self.outcomes.items() if t >= start and (at is None or t <= at)}
+        start -= OUTCOME_TOLERANCE
+        out = {}
+        for kind, times in self.outcomes.items():
+            first = next((t for t in times if t >= start and (at is None or t <= at)), None)
+            if first is not None:
+                out[kind] = first
+        return out
 
     def active_factors(self) -> set[str]:
         return {k for k, x in self.factors.items() if x["active"]}
@@ -153,6 +170,16 @@ class Engine:
                 touched[e.patient_id] = state
         return {pid: self._recompute(s, s.clock) for pid, s in touched.items() if s.clock is not None}
 
+    def preload(self, events: Iterable[Event]) -> int:
+        """Apply prior history (arrival-time pull) without recomputing, so no
+        snapshot is emitted for times before the patient's current visit.
+        Returns the number of events applied."""
+        n = 0
+        for e in sorted(events, key=lambda e: e.time):
+            self.patients.setdefault(e.patient_id, PatientState(e.patient_id)).apply(e)
+            n += 1
+        return n
+
     def tick(self, at: datetime) -> dict[str, dict]:
         """Recompute every patient at wall-clock ``at`` so values age out
         (and are reported stale) even when no new data arrives."""
@@ -169,8 +196,9 @@ class Engine:
 
     def outcomes(self) -> list[tuple[str, str, datetime]]:
         """(patient_id, outcome type, time) for every observed composite outcome."""
+        gap = timedelta(hours=self.cfg.episode_gap_hours)
         return sorted(((pid, k, t) for pid, s in self.patients.items()
-                       for k, t in s.observed_outcomes().items()), key=lambda x: (x[0], x[2]))
+                       for k, t in s.observed_outcomes(gap).items()), key=lambda x: (x[0], x[2]))
 
     def history(self, patient_id: str) -> list[dict]:
         s = self.patients.get(patient_id)
@@ -205,6 +233,10 @@ class Engine:
         qs = scores.qsofa(v)
         mw = scores.mews(v)
         so = scores.sofa(v, meds, n_pressors)
+        gap = timedelta(hours=cfg.episode_gap_hours)
+        base = baselines.compute(s.series, s.episode_start(at, gap), cfg.baseline_lookback_days)
+        base_sofa = base.get("sofa", {"components": {}, "total": 0, "known": False})
+        sofa_acute = scores.acute_sofa(so.components, base_sofa["components"])
         pad = scores.padua(factors, s.context.get("age"))
         cci = scores.charlson(factors)
         cr1 = scores.crs(v, s.context, factors, meds, n2.total, qs.total, cfg)
@@ -212,7 +244,8 @@ class Engine:
         uri_v1, _ = scores.composite(
             {"news2": n2.total, "qsofa": qs.total, "mews": mw.total, "crs": cr1.total}, cfg.weights_v1(), cfg)
         uri_static, breakdown = scores.composite(
-            {"news2": n2.total, "sofa": so.total, "crs2": cr2.total}, cfg.weights_v2, cfg)
+            {"news2": n2.total, "sofa": sofa_acute if cfg.sofa_acute_in_composite else so.total,
+             "crs2": cr2.total}, cfg.weights_v2, cfg)
 
         # Histories the trend detectors look back over.
         s.news2_hist.add(at, dict(n2.components))
@@ -225,11 +258,13 @@ class Engine:
             s.map_hist.add(last_bp[0] if last_bp else at, m)
         map_points = s.map_hist.window(at - timedelta(hours=4), at)
 
+        above_baseline = sofa_acute if base_sofa["known"] else None
         traj_points, signals = trends.trajectory(s.series, s.news2_hist, s.sofa_hist, map_points, v,
-                                                 at, cfg, s.pressor_hist)
+                                                 at, cfg, s.pressor_hist, base, above_baseline)
         traj_norm = min(1.0, traj_points / cfg.trajectory_cap)
         sofa_rise = trends.component_rise(s.sofa_hist, at, timedelta(hours=48))
-        floor, floor_reason = scores.floor(n2, sofa_rise, v, meds)
+        sofa_delta = max(sofa_rise or 0, above_baseline or 0)
+        floor, floor_reason = scores.floor(n2, sofa_delta, v, meds)
         uri = round(max(floor, min(100.0, uri_static + cfg.trajectory_weight * traj_norm)), 1)
 
         signal_ids = {x.id for x in signals}
@@ -237,14 +272,18 @@ class Engine:
 
         sofa_d = so.to_dict()
         sofa_d["rise_48h"] = sofa_rise
+        sofa_d["baseline"] = base_sofa["total"] if base_sofa["known"] else None
+        sofa_d["acute"] = sofa_acute
         snap = {
             "patient_id": s.patient_id,
             "time": at.isoformat(),
+            "episode_start": base.get("episode_start"),
             "uri": uri,
             "band": scores.band(uri),
             "uri_static": uri_static,
             "uri_v1": uri_v1,
             "floor": {"value": floor, "reason": floor_reason},
+            "baseline": base,
             "components": breakdown,
             "scores": {"news2": n2.to_dict(), "qsofa": qs.to_dict(), "mews": mw.to_dict(),
                        "sofa": sofa_d, "charlson": cci.to_dict(), "padua": pad.to_dict(), "crs": cr1.to_dict(), "crs2": cr2.to_dict()},
@@ -267,7 +306,7 @@ class Engine:
                              "missing_core": sorted(set(n2.missing) | set(so.missing) | set(cr2.missing))},
         }
         snap["outcomes"] = [{"type": k, "time": t.isoformat()}
-                            for k, t in sorted(s.observed_outcomes(at).items(), key=lambda x: x[1])]
+                            for k, t in sorted(s.observed_outcomes(gap, at).items(), key=lambda x: x[1])]
         snap["study_eligibility"] = self._eligibility(s, factors)
         snap["time_windows"] = self._windows(snap)
         snap["alerts"] = self._alerts(s, snap, at)

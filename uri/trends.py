@@ -98,29 +98,49 @@ def lactate_trend(lactate: Series, at: datetime) -> Signal | None:
     return None
 
 
-def hgb_drop(hgb: Series, at: datetime) -> Signal | None:
+def hgb_drop(hgb: Series, at: datetime, baseline: float | None = None) -> Signal | None:
+    """Fall within 24 h, or (with a pre-episode baseline) below the patient's
+    usual value, which catches bleeding already under way at arrival."""
     pts = _num(hgb, at, 24 * H)
-    if len(pts) < 2:
+    if not pts:
         return None
-    drop = max(x for _, x in pts) - pts[-1][1]
-    if drop >= 2:
-        return Signal("hgb_drop", 3, f"Hgb down {drop:.1f} g/dL in 24 h")
-    if drop >= 1:
-        return Signal("hgb_drop", 1, f"Hgb down {drop:.1f} g/dL in 24 h")
-    return None
+    best = None
+    if len(pts) >= 2:
+        drop = max(x for _, x in pts) - pts[-1][1]
+        if drop >= 1:
+            best = Signal("hgb_drop", 3 if drop >= 2 else 1, f"Hgb down {drop:.1f} g/dL in 24 h")
+    if baseline is not None:
+        below = baseline - pts[-1][1]
+        if below >= 2 and (best is None or best.points < (3 if below >= 3 else 2)):
+            best = Signal("hgb_drop", 3 if below >= 3 else 2,
+                          f"Hgb {pts[-1][1]:g}, {below:.1f} g/dL below baseline {baseline:g}")
+    return best
 
 
-def aki_kdigo(creatinine: Series, at: datetime) -> Signal | None:
+def aki_kdigo(creatinine: Series, at: datetime, baseline: float | None = None) -> Signal | None:
+    """KDIGO 2012. With a pre-episode baseline the stage is graded on arrival
+    from a single value; without one, the 7-day minimum stands in."""
     pts48 = _num(creatinine, at, 48 * H)
+    if not pts48:
+        return None
+    last = pts48[-1][1]
+    rise48 = len(pts48) >= 2 and last - min(x for _, x in pts48[:-1]) >= 0.3
+    if baseline:
+        ratio = last / baseline
+        stage = 3 if ratio >= 3 or (last >= 4.0 and (rise48 or ratio >= 1.5)) else \
+            2 if ratio >= 2 else 1 if ratio >= 1.5 or rise48 else 0
+        if stage:
+            return Signal("aki", 2 if stage == 1 else 3,
+                          f"KDIGO stage {stage}: creatinine {last:g} = {ratio:.1f}x baseline {baseline:g}")
+        return None
     pts7d = _num(creatinine, at, 7 * 24 * H)
     if len(pts7d) < 2:
         return None
-    last = pts7d[-1][1]
-    if len(pts48) >= 2 and last - min(x for _, x in pts48[:-1]) >= 0.3:
+    if rise48:
         return Signal("aki", 2, "creatinine up >= 0.3 mg/dL in 48 h (KDIGO)")
     base = min(x for _, x in pts7d[:-1])
     if base and last / base >= 1.5:
-        return Signal("aki", 2, f"creatinine {last / base:.1f}x baseline in 7 d (KDIGO)")
+        return Signal("aki", 2, f"creatinine {last / base:.1f}x 7-day minimum (KDIGO; no prior baseline)")
     return None
 
 
@@ -207,17 +227,27 @@ def pressor_escalation(pressors: Series, at: datetime) -> Signal | None:
 
 
 def trajectory(series: dict[str, Series], news2_hist: Series, sofa_hist: Series, map_values, v: dict,
-               at: datetime, cfg: Config, pressor_hist: Series | None = None) -> tuple[float, list[Signal]]:
+               at: datetime, cfg: Config, pressor_hist: Series | None = None, baseline: dict | None = None,
+               sofa_above_baseline: int | None = None) -> tuple[float, list[Signal]]:
     g = series.get
+    base = baseline or {}
+
+    def bval(param):
+        return (base.get(param) or {}).get("value")
+
+    sofa_signal = sofa_rise(sofa_hist, at)
+    if sofa_signal is None and sofa_above_baseline is not None and sofa_above_baseline >= 2:
+        sofa_signal = Signal("sofa_rise", 3, f"SOFA {sofa_above_baseline:g} points above pre-episode baseline "
+                                             "(>= 2: new organ dysfunction)")
     signals = [
         news2_rise(news2_hist, at),
-        sofa_rise(sofa_hist, at),
+        sofa_signal,
         rox_low(v),
         shock_index_trend(g("hr"), g("sbp"), at, cfg.shock_index_threshold),
         map_sustained_low(map_values),
         lactate_trend(g("lactate"), at),
-        hgb_drop(g("hgb"), at),
-        aki_kdigo(g("creatinine"), at),
+        hgb_drop(g("hgb"), at, bval("hgb")),
+        aki_kdigo(g("creatinine"), at, bval("creatinine")),
         troponin_delta(g("troponin_hs"), at, cfg.troponin_url_ng_l),
         oxygenation_decline(g("spo2"), g("o2_supplemental"), g("fio2"), at),
         rr_rise(g("rr"), at),

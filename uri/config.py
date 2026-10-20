@@ -61,6 +61,15 @@ class Config:
     usable_hours: dict = field(default_factory=lambda: {"vital": 12, "lab": 48})
     fresh_hours: dict = field(default_factory=lambda: {"vital": 2, "lab": 24})
 
+    # --- Episodes and baselines ------------------------------------------
+    # A gap longer than this between measurements starts a new episode;
+    # results before the episode form the patient's baseline (uri.baseline).
+    episode_gap_hours: float = 24.0
+    baseline_lookback_days: int = 365
+    # Score SOFA in the composite as acute change above the pre-episode
+    # baseline (Sepsis-3), so chronic organ dysfunction is not counted as new.
+    sofa_acute_in_composite: bool = True
+
     # --- Thresholds ------------------------------------------------------
     # hs-troponin 99th percentile URL is assay-specific; set to your assay.
     troponin_url_ng_l: float = 14.0

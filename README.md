@@ -11,6 +11,10 @@ same stream, and can be calibrated to real 6–48 h probabilities.
   information, so no vital sign is counted twice.
 * **Trajectory layer:** NEWS2/SOFA rises, shock index, Hgb drop, lactate
   clearance, KDIGO AKI, troponin delta, oxygenation, ROX.
+* **Arrival-time history and baselines:** prior results are pulled from the
+  EHR's FHIR API when a patient first appears. Organ dysfunction, AKI and Hgb
+  are scored against the patient's own pre-episode baseline, so a CKD
+  patient's usual creatinine is not new renal failure.
 * **Full v1 coverage:** all 60 history items, 28 medication classes and 33 numeric labs
   are detected from the EMR. Items with no diagnosis code are derived from
   Procedure, Encounter, medication and Consent data, plus the Padua score.
@@ -37,6 +41,7 @@ python -m uri demo                       # sepsis, occult GI bleed, hypercapnic 
 python -m uri simulate > feed.ndjson     # write the synthetic FHIR feed
 python -m uri replay feed.ndjson --log snapshots.jsonl --outcomes-out outcomes.csv
 python -m uri serve --port 8080 --log shadow.jsonl   # receive FHIR pushes
+URI_FHIR_TOKEN=... python -m uri serve --history-url https://ehr.example/fhir   # + arrival-time history
 python -m uri.calibrate --snapshots snapshots.jsonl --outcomes outcomes.csv --bootstrap 200 --out model.json
 python -m unittest discover -s tests -t .
 
@@ -101,6 +106,8 @@ uri/
   causes.py     correctable-cause rules (21)
   labs.py       v1 critical / flag thresholds
   engine.py     per-patient state, recompute, alerts, sinks
+  baseline.py   episodes and pre-episode baselines
+  history.py    arrival-time FHIR history pull
   model.py      feature definition + fitted-model scoring
   calibrate.py  per-horizon logistic fit, bootstrap validation (numpy)
   server.py     HTTP receiver (stdlib)
