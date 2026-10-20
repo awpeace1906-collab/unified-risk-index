@@ -1,0 +1,4 @@
+record_id,triage_time,age,admitted,excluded_reason,icu_transfer_time,rrt_time,intubation_time,vasopressor_start_time,death_time,ed_revisit_72h,notes
+EXAMPLE-001,2026-11-02T14:05:00-07:00,71,Y,,2026-11-02T22:40:00-07:00,,,2026-11-02T21:55:00-07:00,,N,delete example rows before use
+EXAMPLE-002,2026-11-02T14:30:00-07:00,45,Y,,,,,,,N,
+EXAMPLE-003,2026-11-02T15:10:00-07:00,88,Y,DNR/DNI without treatment intent,,,,,,N,
