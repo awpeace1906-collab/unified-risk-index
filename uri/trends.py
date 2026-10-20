@@ -119,8 +119,10 @@ def hgb_drop(hgb: Series, at: datetime, baseline: float | None = None) -> Signal
 
 
 def aki_kdigo(creatinine: Series, at: datetime, baseline: float | None = None) -> Signal | None:
-    """KDIGO 2012. With a pre-episode baseline the stage is graded on arrival
-    from a single value; without one, the 7-day minimum stands in."""
+    """KDIGO 2012 (stage thresholds and the 0.3 mg/dl-in-48 h rise confirmed
+    against Kellum 2013, PMC4057151). With a pre-episode baseline the stage is
+    graded on arrival from a single value; without one, the 7-day minimum
+    stands in."""
     pts48 = _num(creatinine, at, 48 * H)
     if not pts48:
         return None

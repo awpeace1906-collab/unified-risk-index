@@ -30,15 +30,18 @@ def encounter(pid, eid, cls, start, end=None):
 
 
 class RuleTableTest(unittest.TestCase):
-    def test_no_window_is_marked_verified_yet(self):
+    def test_statuses(self):
         for r in staleness.RULES:
             self.assertIn(r.status, staleness.STATUSES, r.params)
-            self.assertNotEqual(r.status, staleness.VERIFIED, r.params)  # windows not read from full text
             self.assertTrue(r.pubmed_query and r.source and r.basis, r.params)
+            if r.status == staleness.VERIFIED:  # confirmed in PMC full text: must say where
+                self.assertTrue(r.pmids and "PMC" in r.notes, r.params)
+        verified = [r.params for r in staleness.RULES if r.status == staleness.VERIFIED]
+        self.assertEqual(verified, [("plt", "bilirubin", "creatinine", "bun")])
 
     def test_confirmed_citations_carry_pmid_and_doi(self):
         for r in staleness.RULES:
-            if r.status == staleness.CITATION_CONFIRMED:
+            if r.status in (staleness.CITATION_CONFIRMED, staleness.VERIFIED):
                 self.assertTrue(r.pmids and len(r.dois) == len(r.pmids), r.params)
             if r.status == staleness.UNVERIFIED:
                 self.assertEqual(r.pmids, (), r.params)

@@ -14,7 +14,8 @@ EVERY WINDOW HERE IS STILL A PLACEHOLDER. Status levels:
                       checked against the full text
   NOT_IN_PUBMED       the source is not indexed in PubMed (e.g. the RCP NEWS2
                       report); check the source document directly
-  VERIFIED            window confirmed against the source text (none yet)
+  VERIFIED            window confirmed against full text retrieved from
+                      PubMed Central
 Each rule carries a PubMed query for the remaining work.
 `python -m uri.staleness` prints the list (docs/STALENESS_RULES.md, kept in
 sync by a test).
@@ -34,7 +35,7 @@ CITATION_CONFIRMED = "citation confirmed in PubMed; window to check against full
 NOT_IN_PUBMED = "source not indexed in PubMed; check source document"
 VERIFIED = "verified"
 STATUSES = (UNVERIFIED, CITATION_CONFIRMED, NOT_IN_PUBMED, VERIFIED)
-CHECKED_ON = "2026-10-20"  # PubMed citation check (search + article metadata)
+CHECKED_ON = "2026-10-20"  # PubMed search, article metadata, and PMC full text where available
 
 
 @dataclass(frozen=True)
@@ -69,22 +70,28 @@ RULES: list[Rule] = [
          "Royal College of Physicians. National Early Warning Score (NEWS) 2. London: RCP, 2017",
          '"National Early Warning Score 2" AND (monitoring frequency OR observation frequency)',
          status=NOT_IN_PUBMED,
-         notes="RCP report is grey literature; PubMed papers (e.g. PMID 30287428) confirm NEWS2 is the "
-               "2017 RCP update but do not reproduce the monitoring-frequency chart"),
+         notes="RCP report is grey literature; PubMed papers (PMID 30287428; Williams 2022 PMID 36427887, "
+               "abstract only in PMC) confirm NEWS2 is the 2017 RCP update but do not reproduce the "
+               "monitoring-frequency chart"),
     Rule(("lactate",), None,
          "re-measure within 2-4 h when > 2 mmol/L (4 h used); 24 h when normal",
          "Levy MM, Evans LE, Rhodes A. The Surviving Sepsis Campaign Bundle: 2018 update. "
          "Crit Care Med 2018;46:997-1000",
          '"Surviving Sepsis Campaign" bundle 2018 update lactate remeasure',
-         status=CITATION_CONFIRMED, pmids=("29767636",), dois=("10.1097/CCM.0000000000003119",),
-         notes="abstract not available in PubMed; check the 2-4 h re-measurement interval in the full text"),
+         status=CITATION_CONFIRMED, pmids=("29767636", "34599691"),
+         dois=("10.1097/CCM.0000000000003119", "10.1007/s00134-021-06506-y"),
+         notes="2018 bundle not in PMC (2-4 h interval unchecked). SSC 2021 full text (PMC8486643) recommends "
+               "guiding resuscitation by decreasing lactate but states no re-measurement interval; it "
+               "describes ANDROMEDA-SHOCK measuring lactate every 2 h for the first 8 h of septic shock, "
+               "consistent with a short window"),
     Rule(("troponin_hs",), 6,
          "serial sampling at 0/1 h or 0/2 h (0/3 h) for myocardial infarction rule-in/out; 6 h outer bound",
          "Collet JP et al. 2020 ESC Guidelines for the management of acute coronary syndromes in patients "
          "presenting without persistent ST-segment elevation. Eur Heart J 2021;42:1289-1367",
          "ESC 0/1h algorithm high-sensitivity troponin NSTE-ACS guideline 2020",
          status=CITATION_CONFIRMED, pmids=("32860058",), dois=("10.1093/eurheartj/ehaa575",),
-         notes="abstract not available in PubMed; check the 0/1 h and 0/2 h sampling times in the full text"),
+         notes="abstract not available and no PMC full text; check the 0/1 h and 0/2 h sampling times in "
+               "the guideline itself"),
     Rule(("ph", "pco2", "po2", "hco3"), 6,
          "blood gases change within hours; no guideline re-measurement interval identified",
          "expert placeholder", "arterial blood gas repeat interval critically ill timing"),
@@ -100,10 +107,13 @@ RULES: list[Rule] = [
          "dysfunction/failure. Intensive Care Med 1996;22:707-10; Khwaja A. KDIGO clinical practice "
          "guidelines for acute kidney injury. Nephron Clin Pract 2012;120:c179-84",
          "Sequential Organ Failure Assessment score original description 1996 Vincent",
-         status=CITATION_CONFIRMED, pmids=("8844239", "22890468"),
-         dois=("10.1007/BF01709751", "10.1159/000339789"),
-         notes="abstracts not available; check 'worst value per 24 h' (SOFA) and the 48 h / 7 d windows "
-               "(KDIGO; full guideline is Kidney Int Suppl 2012;2:1-138, not indexed in PubMed)"),
+         status=VERIFIED, pmids=("8844239", "31775846", "22890468", "23394211"),
+         dois=("10.1007/BF01709751", "10.1186/s13054-019-2663-7", "10.1159/000339789", "10.1186/cc11454"),
+         notes="SOFA: Lambden 2019 full text (PMC6880479): the sub-score uses 'the most severe (worst) value "
+               "for the respective 24-h period', as in the original validation. KDIGO: Kellum 2013 full text "
+               "(PMC4057151) confirms a >= 0.3 mg/dl rise 'within a 48-hour period' and stages 1.5-1.9x / "
+               "2.0-2.9x / >= 3.0x or >= 4.0 mg/dl; the 7-day criterion is in a bulleted definition the PMC "
+               "text omits (unchecked)"),
     Rule(("hgb",), None,
          "24 h when stable; 6 h while a drop is under way (active bleeding)",
          "expert placeholder", "hemoglobin monitoring interval acute gastrointestinal bleeding"),
@@ -116,8 +126,9 @@ RULES: list[Rule] = [
          "infections. Cochrane Database Syst Rev 2017;10:CD007498",
          "procalcitonin guided antibiotic therapy remeasurement interval Cochrane",
          status=CITATION_CONFIRMED, pmids=("29025194",), dois=("10.1002/14651858.CD007498.pub3",),
-         notes="abstract does not state a re-measurement interval; check the trial algorithms in the full "
-               "text (PMC6485408). BNP / CRP / D-dimer windows remain expert placeholders"),
+         notes="PMC6485408 returned the abstract only, which states no re-measurement interval; check the "
+               "trial algorithms in the Cochrane full text. BNP / CRP / D-dimer windows remain expert "
+               "placeholders"),
     Rule(("lipase", "alt", "ast", "ammonia", "cortisol", "tsh"), 72,
          "diagnostic rather than trended in this window", "expert placeholder",
          "liver enzyme ammonia repeat testing interval inpatient"),
@@ -172,11 +183,11 @@ def render() -> str:
         "These per-result windows decide when a value is reported as stale. They replace the single",
         "24 h (labs) / 2 h (vitals) windows. **Every window is still a placeholder.**",
         "",
-        f"PubMed check ({CHECKED_ON}): the cited papers were looked up by search and article metadata.",
-        "Where a citation was found, its PMID and DOI are listed and the status is *citation confirmed*.",
-        "That confirms the paper and the citation, **not** the window value, which none of the abstracts",
-        "state. The remaining step is to read the window in each full text, then set `status` to",
-        "`verified`. Expert placeholders have no source yet.",
+        f"PubMed check ({CHECKED_ON}): citations looked up by search and article metadata, and full text",
+        "pulled from PubMed Central where available (PMC holds only open-access papers). *Verified* means",
+        "the window was confirmed in that full text. *Citation confirmed* means the paper exists and is",
+        "cited correctly, but the window value could not be read (paywalled, abstract only, or not stated).",
+        "Expert placeholders have no source yet.",
         "",
         "| Results | Window | Basis | Source | PubMed | Status | Still to do / query |",
         "|---|---|---|---|---|---|---|",
