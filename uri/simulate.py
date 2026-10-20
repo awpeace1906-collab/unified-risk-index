@@ -107,6 +107,12 @@ def gi_bleed(pid: str = "sim-gi_bleed") -> Iterator[dict]:
     yield {"resourceType": "MedicationStatement", "id": f"{pid}-m1", "status": "active",
            "subject": {"reference": f"Patient/{pid}"},
            "medicationCodeableConcept": {"text": "apixaban 5 MG Oral Tablet"}}
+    # Chart history from clinic visits: CKD with a stable creatinine near 2.1,
+    # and a usual hemoglobin around 12.6. This is what sets the baseline.
+    for days, cr, hgb, n_ in ((95, 2.0, 12.4, 800), (60, 2.2, 12.8, 810), (30, 2.1, 12.6, 820)):
+        t = T0 - timedelta(days=days)
+        yield _obs(pid, t, "2160-0", cr, n_)
+        yield _obs(pid, t, "718-7", hgb, n_ + 1)
     course = [  # hours, hr, rr, sbp, dbp, spo2, temp, gcs
         (0, 92, 16, 132, 74, 97, 36.7, 15),
         (2, 98, 17, 124, 70, 97, 36.6, 15),

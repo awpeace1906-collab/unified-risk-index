@@ -82,8 +82,8 @@ class EngineTest(unittest.TestCase):
     def test_stale_and_expired_values(self):
         e = Engine()
         e.ingest_many(vitals("p", T0))
-        snap = e.tick(T0 + 3 * H)["p"]
-        self.assertIn("hr", {x["parameter"] for x in snap["data_quality"]["stale"]})
+        snap = e.tick(T0 + 3 * H)["p"]  # NEWS2 0: vitals current for 12 h
+        self.assertNotIn("hr", {x["parameter"] for x in snap["data_quality"]["stale"]})
         snap = e.tick(T0 + 13 * H)["p"]  # past the 12 h usable horizon
         self.assertIn("rr", snap["scores"]["news2"]["missing"])
 

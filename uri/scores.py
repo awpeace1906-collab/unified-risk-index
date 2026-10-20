@@ -266,6 +266,26 @@ def pf_equivalent(v: dict) -> tuple[float | None, str]:
     return (spo2 / frac - 64) / 0.84, "S/F"
 
 
+def sofa_coagulation(plt: float) -> int:
+    return 0 if plt >= 150 else 1 if plt >= 100 else 2 if plt >= 50 else 3 if plt >= 20 else 4
+
+
+def sofa_liver(bili: float) -> int:
+    return 0 if bili < 1.2 else 1 if bili < 2.0 else 2 if bili < 6.0 else 3 if bili < 12.0 else 4
+
+
+def sofa_renal(cr: float) -> int:
+    return 0 if cr < 1.2 else 1 if cr < 2.0 else 2 if cr < 3.5 else 3 if cr < 5.0 else 4
+
+
+def acute_sofa(current: dict, baseline: dict) -> int:
+    """Sepsis-3 acute change: per organ, the points above that organ's
+    pre-episode baseline (0 where the baseline is unknown, the Sepsis-3
+    convention). Chronic dysfunction (CKD, cirrhosis) is therefore not scored
+    as new organ failure; it is carried by Charlson instead."""
+    return sum(max(0, pts - baseline.get(organ, 0)) for organ, pts in current.items())
+
+
 def sofa(v: dict, meds: set[str], n_pressors: int = 0) -> ScoreResult:
     r = ScoreResult(0)
     d = r.components
@@ -287,13 +307,13 @@ def sofa(v: dict, meds: set[str], n_pressors: int = 0) -> ScoreResult:
     if plt is None:
         r.missing.append("coagulation")
     else:
-        d["coagulation"] = 0 if plt >= 150 else 1 if plt >= 100 else 2 if plt >= 50 else 3 if plt >= 20 else 4
+        d["coagulation"] = sofa_coagulation(plt)
 
     bili = v.get("bilirubin")
     if bili is None:
         r.missing.append("liver")
     else:
-        d["liver"] = 0 if bili < 1.2 else 1 if bili < 2.0 else 2 if bili < 6.0 else 3 if bili < 12.0 else 4
+        d["liver"] = sofa_liver(bili)
 
     m = mean_arterial(v)
     if n_pressors >= 2 or "vasopressor" in meds:
@@ -317,7 +337,7 @@ def sofa(v: dict, meds: set[str], n_pressors: int = 0) -> ScoreResult:
     if cr is None:
         r.missing.append("renal")
     else:
-        d["renal"] = 0 if cr < 1.2 else 1 if cr < 2.0 else 2 if cr < 3.5 else 3 if cr < 5.0 else 4
+        d["renal"] = sofa_renal(cr)
 
     r.total = sum(d.values())
     return r
@@ -426,7 +446,7 @@ def window_level(pct: float) -> str:
     return "LOW"
 
 
-def floor(news2_result: ScoreResult, sofa_rise: float | None, v: dict, meds: set[str]) -> tuple[float, str]:
+def floor(news2_result: ScoreResult, sofa_delta: float | None, v: dict, meds: set[str]) -> tuple[float, str]:
     """Minimum URI implied by the escalation tiers of the validated
     instruments themselves. A weighted average dilutes one alarming channel
     (NEWS2 7 with normal labs scores ~16 by weight alone); the floor keeps the
@@ -440,7 +460,7 @@ def floor(news2_result: ScoreResult, sofa_rise: float | None, v: dict, meds: set
         tiers.append((41.0, "NEWS2 5-6 (RCP medium: urgent response)"))
     elif news2_result.flags:
         tiers.append((21.0, "NEWS2 single parameter = 3 (RCP low-medium)"))
-    if sofa_rise is not None and sofa_rise >= 2:
+    if sofa_delta is not None and sofa_delta >= 2:
         tiers.append((41.0, "acute SOFA rise >= 2 (Sepsis-3 organ dysfunction)"))
     if "vasopressor" in meds and v.get("lactate") is not None and v["lactate"] > 2:
         tiers.append((81.0, "vasopressor with lactate > 2 (Sepsis-3 septic shock criteria)"))

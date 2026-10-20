@@ -51,6 +51,9 @@ CPT = "http://www.ama-assn.org/go/cpt"
 INTUBATION_CODES = {(SNOMED, "112798008"), (CPT, "31500")}  # endotracheal intubation
 SURGICAL_CATEGORY = (SNOMED, "387713003")                  # surgical procedure
 INPATIENT_CLASSES = {"IMP", "ACUTE", "NONAC"}
+# Encounter classes that make up an acute-care visit (ED arrival through the
+# linked admission). Clinic (AMB) encounters do not: their results are baseline.
+VISIT_CLASSES = {"EMER", "OBSENC"} | INPATIENT_CLASSES
 DEFAULT_ICU_PATTERNS = ("icu", "intensive care", "critical care", "micu", "sicu", "ccu", "cvicu", "neuro icu")
 PRESSOR_START = ("norepinephrine", "epinephrine", "vasopressin", "phenylephrine", "dopamine", "angiotensin ii")
 
@@ -321,9 +324,14 @@ class FhirAdapter:
         out = []
         cls = (r.get("class") or {}).get("code")
         end = (r.get("period") or {}).get("end")
+        start = (r.get("period") or {}).get("start")
         if cls in INPATIENT_CLASSES and r.get("status") == "finished" and end:
             out.append(Event(pid, EPOCH, CONTEXT, "last_inpatient_discharge", parse_time(end).isoformat(),
                              source=src))
+        if cls in VISIT_CLASSES and start and r.get("status") not in ("cancelled", "entered-in-error", "planned"):
+            out.append(Event(pid, EPOCH, CONTEXT, "encounter", {
+                "id": r.get("id", ""), "class": cls, "start": parse_time(start).isoformat(),
+                "end": parse_time(end).isoformat() if end else None}, source=src))
         for loc in r.get("location", []):
             name = ((loc.get("location") or {}).get("display") or "").lower()
             start = (loc.get("period") or {}).get("start") or (r.get("period") or {}).get("start")

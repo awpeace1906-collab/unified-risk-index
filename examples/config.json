@@ -41,10 +41,10 @@
     "vital": 12,
     "lab": 48
   },
-  "fresh_hours": {
-    "vital": 2,
-    "lab": 24
-  },
+  "episode_gap_hours": 36.0,
+  "labs_hold_through_episode": true,
+  "baseline_lookback_days": 365,
+  "sofa_acute_in_composite": true,
   "troponin_url_ng_l": 14.0,
   "bnp_severe_pg_ml": 400.0,
   "ntprobnp_severe_pg_ml": 1800.0,

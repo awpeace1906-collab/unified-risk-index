@@ -49,7 +49,7 @@ Wells (diagnostic, not deterioration).
 | Vitals, labs, problem list, med list | Already mapped | FHIR Observation / Condition / Medication* |
 | **MAR with doses** | Exact SOFA cardiovascular (agent count and vasopressor-start outcome are already captured); time to antibiotics | MedicationAdministration |
 | **Intake/output** | Urine output (KDIGO, SOFA, MEWS) | Flowsheets |
-| **Prior encounters and labs** | True baselines for creatinine, Hgb and SOFA. "Baseline" is currently the minimum within the encounter, so CKD inflates SOFA renal. Also recent ED visits and admissions. | FHIR search / bulk export at arrival |
+| **Prior encounters and labs** | Built: pulled at arrival (`serve --history-url`) or included in replayed exports, giving pre-episode baselines for creatinine, Hgb, platelets, bilirubin and SOFA (`uri/baseline.py`). Still to add: vital-sign baselines. | FHIR search at arrival / bulk export |
 | **Nursing assessments** | Head-to-toe pass/fail is the strongest single input of the Rothman Index | Flowsheets |
 | **Clinician-concern signals** | Frequency of vitals and STAT/repeat lab orders predicts deterioration independently of the values (Rossetti 2021, CONCERN) | ServiceRequest / audit timestamps |
 | **ADT / location** | ICU transfer is already captured from Encounter.location; ED boarding time and planned-vs-unplanned still need ADT event types | ADT feed / Encounter.location |

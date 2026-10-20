@@ -36,8 +36,12 @@ def render() -> str:
     w("* **Resources:** `Patient`, `Encounter`, `Observation` (vital-signs and laboratory),")
     w("  `Condition` (problem list and encounter diagnoses), `MedicationRequest`,")
     w("  `MedicationStatement`, `MedicationAdministration`, `Procedure`, `Consent`.")
-    w("* **Window:** from 90 days before each ED arrival (recent hospitalization, recent surgery,")
-    w("  baselines) to 48 h after it (outcomes).")
+    w("* **Window:** from 365 days before each ED arrival for creatinine, hemoglobin, platelets,")
+    w("  bilirubin and pCO2 (pre-episode baselines), 90 days for encounters and procedures (recent")
+    w("  hospitalization / surgery), to 48 h after arrival (outcomes).")
+    w("* **Units of analysis:** one ED encounter per subject id. A patient with several ED")
+    w("  encounters in the period should appear once per encounter (e.g. `patientid-encounterid`),")
+    w("  because outcomes and calibration rows are taken from each subject's latest episode.")
     w("* **Timestamps:** observation/effective times, not result-filed times, wherever both exist.")
     w("* **De-identification:** shift dates consistently per patient if required; intervals are all")
     w("  the engine needs.")
@@ -107,6 +111,8 @@ def render() -> str:
     w("| Emergent intubation (outcome) | Procedure | "
       + ", ".join(f"{s.rsplit('/', 1)[-1]} {c}" for s, c in sorted(fhir.INTUBATION_CODES)) + " |")
     w(f"| Recent surgery | Procedure | category {fhir.SURGICAL_CATEGORY[1]} (surgical procedure), performed date |")
+    w("| Visit boundaries | Encounter | class " + "/".join(sorted(fhir.VISIT_CLASSES))
+      + ", status, period.start / period.end (ED arrival through the linked admission) |")
     w("| Recent hospitalization | Encounter | class " + "/".join(sorted(fhir.INPATIENT_CLASSES))
       + ", status finished, period.end |")
     w("| ICU transfer (outcome) | Encounter.location | location display matching: "

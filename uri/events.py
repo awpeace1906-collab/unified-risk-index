@@ -84,7 +84,8 @@ PARAMETERS: dict[str, tuple[str, str]] = {
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)  # time for undated facts
 
-CONTEXT_KEYS = {"age", "cfs", "sex", "hypercapnic_target", "last_surgery", "last_inpatient_discharge"}
+CONTEXT_KEYS = {"age", "cfs", "sex", "hypercapnic_target", "last_surgery", "last_inpatient_discharge",
+                "encounter"}
 
 
 def utc(dt: datetime) -> datetime:

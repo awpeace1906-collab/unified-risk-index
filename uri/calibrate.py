@@ -56,12 +56,15 @@ def load_ends(path: str | None) -> dict:
 
 
 def landmarks(snapshots, outcomes: dict, every: timedelta) -> list[dict]:
-    """One snapshot per patient per interval, before the patient's first event."""
+    """One snapshot per patient per interval, from the patient's latest
+    episode (the one outcomes are counted in) and before their first event."""
     by_patient = defaultdict(list)
     for snap in snapshots:
         by_patient[snap["patient_id"]].append(snap)
     rows = []
     for pid, snaps in by_patient.items():
+        latest = max((s.get("episode_start") or "" for s in snaps), default="")
+        snaps = [s for s in snaps if (s.get("episode_start") or "") == latest]
         snaps.sort(key=lambda s: s["time"])
         event = outcomes.get(pid)
         last = None
