@@ -92,6 +92,7 @@ data, and alerts.
 * [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the index formula, trajectory signals, streaming behaviour, and how this fits the Phase 1–4 research plan
 * [docs/RISK_FACTORS.md](docs/RISK_FACTORS.md): the evidence-graded registry and its coverage of the v1 panels
+* [docs/PI_DECISIONS_EVIDENCE.md](docs/PI_DECISIONS_EVIDENCE.md): literature behind the open PI decisions (comorbidity/medication terms, sample sizes)
 * [docs/EXCEL_RECONCILIATION.md](docs/EXCEL_RECONCILIATION.md): cell-reference bugs in the v1 workbook and the decisions they need
 
 ## Layout

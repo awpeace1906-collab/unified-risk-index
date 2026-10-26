@@ -30,6 +30,21 @@ class SampleSizeTest(unittest.TestCase):
         self.assertGreaterEqual(v["events"], 100)
         self.assertGreaterEqual(v["n"], v["n_min_events"])
 
+    def test_lp_distribution_matches_rate_and_c(self):
+        mu, sigma = samplesize.lp_distribution(0.06, 0.75)
+        phi, c = samplesize._lp_moments(mu, sigma)
+        self.assertAlmostEqual(phi, 0.06, places=4)
+        self.assertAlmostEqual(c, 0.75, places=3)
+
+    def test_calibration_slope_criterion(self):
+        # checked by simulation: 300 validation sets of this n gave slope SD 0.052 (target 0.051)
+        v = samplesize.validation(0.06, 0.75)
+        self.assertEqual(v["binding"], "slope")
+        self.assertAlmostEqual(v["n_calibration_slope"], 8763, delta=50)
+        # a tighter slope CI needs about four times the patients
+        mu, sigma = samplesize.lp_distribution(0.06, 0.75)
+        self.assertAlmostEqual(samplesize.n_calibration_slope(mu, sigma, 0.1) / v["n_calibration_slope"], 4, delta=0.01)
+
 
 class AuditTest(unittest.TestCase):
     def write(self, rows):
