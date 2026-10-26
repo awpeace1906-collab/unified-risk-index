@@ -83,11 +83,14 @@ Two statements in the proposal do not match the Riley criteria it cites:
    methodological challenge from a grant reviewer.
 2. **Phase 2 (section 2.5)** says about 500 encounters (30 events) suffice
    for validation. External-validation guidance asks for **at least 100
-   events, preferably 200** (Collins 2016). Riley 2021's O/E-precision
-   criterion asks for more still: about 6,600 encounters at 6% for a 95% CI of
-   0.9–1.1 on O/E. At 6% that is roughly 1,700–6,600 encounters. The
-   sequential stopping rule in 2.5 remains useful, but the planned minimum
-   should rise.
+   events** (Collins 2016). Riley 2021 adds O/E precision and the
+   calibration slope, which usually sets the minimum. `uri.samplesize`
+   implements the slope criterion. At 6% and C 0.75 it gives a minimum of
+   **~8,800 encounters (~530 events)**; at C 0.80, ~6,600. That makes Phase
+   2 multicenter. The sequential stopping rule in 2.5 can stay as an interim
+   look, but the planned minimum should rise. Recompute with `--lp <mean> <sd>`
+   from the Phase 1 model. The evidence is in
+   [PI_DECISIONS_EVIDENCE.md](PI_DECISIONS_EVIDENCE.md).
 
 Use the conservative R² until the Phase 1 model gives a real one. Also note
 that streaming produces many snapshots per patient, but the effective sample

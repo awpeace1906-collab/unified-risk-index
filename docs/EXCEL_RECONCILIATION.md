@@ -18,8 +18,8 @@ definitive scoring.
 | 4 | CRS renal `D26` | Creatinine from `C45` (platelets). | Creatinine. |
 | 5 | CRS hematologic `D27` | Hemoglobin from `C47` (BUN). | Hemoglobin. |
 | 6 | CRS cardiac `D28` | Troponin from `C51` (pH), BNP from `C52` (pCO₂). Troponin threshold 0.04 is in ng/mL; the input row is labelled ng/L. | Troponin and BNP; troponin compared with `troponin_url_ng_l` (default 14 ng/L, set to your assay's 99th percentile). NT-proBNP > 1800 pg/mL accepted as an alternative to BNP > 400. |
-| 7 | CRS comorbidity `D29` | Scores `C28` (DM type 1) where the manuscript lists CKD. | CKD = 1 point. **Confirm.** |
-| 8 | CRS medication `D30` | Reads `C70` (thyroid meds), `C72`, `C73` (empty). | Reconstructed from the label "Anticoag, diuretics, insulin, opioids": anticoagulant 1, insulin 1.5, opioid 1. Diuretics are monitored but unweighted, since the formula had only three terms. **Confirm.** |
+| 7 | CRS comorbidity `D29` | Scores `C28` (DM type 1) where the manuscript lists CKD. | CKD = 1 point. **Confirm.** Evidence supports CKD ([PI_DECISIONS_EVIDENCE.md](PI_DECISIONS_EVIDENCE.md)). |
+| 8 | CRS medication `D30` | Reads `C70` (thyroid meds), `C72`, `C73` (empty). | Reconstructed from the label "Anticoag, diuretics, insulin, opioids": anticoagulant 1, insulin 1.5, opioid 1. Diuretics are monitored but unweighted, since the formula had only three terms. **Confirm.** ADE surveillance ranks anticoagulants first, so the evidence suggests anticoagulant 1.5 ([PI_DECISIONS_EVIDENCE.md](PI_DECISIONS_EVIDENCE.md)). |
 
 ## Deliberate departures from the workbook's scoring
 
