@@ -90,8 +90,18 @@ class Config:
     sofa_acute_in_composite: bool = True
 
     # --- Thresholds ------------------------------------------------------
-    # hs-troponin 99th percentile URL is assay-specific; set to your assay.
-    troponin_url_ng_l: float = 14.0
+    # Troponin 99th-percentile upper reference limit (URL) per assay, ng/L.
+    # Every result is stored as a multiple of its own assay's URL, so
+    # high-sensitivity and conventional assays (T or I) can be used
+    # interchangeably by the rules (> 1 x URL = above the 99th percentile,
+    # a relative rise >= 20 % = delta). The defaults are typical
+    # manufacturer values; set each to your laboratory's assay.
+    troponin_urls: dict = field(default_factory=lambda: {
+        "hs_tnt": 14.0,   # high-sensitivity troponin T (e.g. Roche Elecsys)
+        "hs_tni": 26.0,   # high-sensitivity troponin I (e.g. Abbott; sex-specific 16 F / 34 M)
+        "tnt": 10.0,      # conventional troponin T, 0.01 ng/mL (Roche 4th generation)
+        "tni": 40.0,      # conventional troponin I, 0.04 ng/mL (assay-dependent)
+    })
     bnp_severe_pg_ml: float = 400.0
     ntprobnp_severe_pg_ml: float = 1800.0
     shock_index_threshold: float = 1.0

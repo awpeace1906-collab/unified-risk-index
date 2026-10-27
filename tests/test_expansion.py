@@ -152,6 +152,27 @@ class CriticalCareTest(unittest.TestCase):
         snap = e.ingest_many(core_vitals(T0 + 80 * H))["p"]
         self.assertEqual(sorted(snap["scores"]["news2"]["missing"]), ["consciousness", "o2"])
 
+    def test_troponin_assays_are_interchangeable(self):
+        a = FhirAdapter()
+
+        def trop(loinc, value, unit, t):
+            obs = simulate._obs("p", t, loinc, value, 1)
+            obs["valueQuantity"] = {"value": value, "unit": unit, "code": unit}
+            return a.events(obs)
+        hs = trop("67151-1", 28, "ng/L", T0)          # hs-TnT, URL 14 ng/L
+        conv = trop("10839-9", 0.08, "ng/mL", T0)     # conventional TnI, URL 0.04 ng/mL
+        self.assertEqual([(ev.code, ev.value) for ev in hs + conv], [("troponin", 2.0), ("troponin", 2.0)])
+        # a rise is detected on the shared scale whichever assay reported it
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + trop("10839-9", 0.05, "ng/mL", T0))
+        snap = e.ingest_many(vitals("p", T0 + 3 * H) + trop("10839-9", 0.20, "ng/mL", T0 + 3 * H))["p"]
+        self.assertIn("troponin_rising", {sig["id"] for sig in snap["trajectory"]["signals"]})
+        # a site's own URL is used when configured
+        b = FhirAdapter(troponin_urls={"hs_tni": 34.0})
+        obs = simulate._obs("p", T0, "89579-7", 68, 1)
+        obs["valueQuantity"] = {"value": 68, "unit": "ng/L"}
+        self.assertEqual(b.events(obs)[0].value, 2.0)
+
     def test_implausible_values_dropped(self):
         a = FhirAdapter()
         obs = simulate._obs("p", T0, "8867-4", 900, 1)  # heart rate 900

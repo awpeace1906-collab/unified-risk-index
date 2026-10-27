@@ -13,6 +13,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from . import registry
+from .config import Config
 from .events import (CONDITION, CONTEXT, CONTEXT_KEYS, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, parse_time,
                      plausible)
 
@@ -25,7 +26,9 @@ LOINC_MAP: dict[str, str] = {
     "3150-0": "fio2", "3151-8": "o2_flow", "72514-3": "pain", "19889-5": "etco2",
     # labs
     "2524-7": "lactate", "32693-4": "lactate", "6690-2": "wbc", "718-7": "hgb", "777-3": "plt",
-    "2160-0": "creatinine", "3094-0": "bun", "67151-1": "troponin_hs", "89579-7": "troponin_hs",
+    "2160-0": "creatinine", "3094-0": "bun", "67151-1": "troponin:hs_tnt", "89579-7": "troponin:hs_tni",
+    "6598-7": "troponin:tnt", "48425-3": "troponin:tnt", "10839-9": "troponin:tni", "42757-5": "troponin:tni",
+    "49563-0": "troponin:tni",
     "30934-4": "bnp", "42637-9": "bnp", "33762-6": "ntprobnp", "48065-7": "ddimer",
     "2744-1": "ph", "2746-6": "ph", "2019-8": "pco2", "2703-7": "po2",
     "2951-2": "na", "2823-3": "k", "6298-4": "k", "1963-8": "hco3", "2028-9": "hco3",
@@ -41,7 +44,7 @@ _FACTORS = {
     ("glucose", "mmol/l"): 18.016,
     ("creatinine", "umol/l"): 1 / 88.42, ("creatinine", "µmol/l"): 1 / 88.42,
     ("hgb", "g/l"): 0.1,
-    ("troponin_hs", "ng/ml"): 1000, ("troponin_hs", "ug/l"): 1000, ("troponin_hs", "µg/l"): 1000,
+    ("troponin", "ng/ml"): 1000, ("troponin", "ug/l"): 1000, ("troponin", "µg/l"): 1000,
     ("lactate", "mg/dl"): 1 / 9.008,
     ("fibrinogen", "g/l"): 100,
     ("bun", "mmol/l"): 2.8,
@@ -95,6 +98,11 @@ def _convert(param: str, value: float, unit: str) -> float:
     return value * _FACTORS.get((param, u), 1)
 
 
+def troponin_ratio(value: float, unit: str, url_ng_l: float) -> float:
+    """A troponin result in any mass unit as a multiple of the assay URL (ng/L)."""
+    return _convert("troponin", value, unit) / url_ng_l
+
+
 def support_level(text) -> float | None:
     if isinstance(text, (int, float)):
         return float(text)
@@ -124,8 +132,9 @@ def _dose_mg(r: dict) -> float | None:
 
 class FhirAdapter:
     def __init__(self, local_codes: dict | None = None, now: datetime | None = None,
-                 icu_patterns: tuple[str, ...] = DEFAULT_ICU_PATTERNS):
+                 icu_patterns: tuple[str, ...] = DEFAULT_ICU_PATTERNS, troponin_urls: dict | None = None):
         self.local_codes = local_codes or {}
+        self.troponin_urls = troponin_urls or Config().troponin_urls
         self.now = now
         self.icu_patterns = tuple(p.lower() for p in icu_patterns)
         self.skipped = Counter()
@@ -197,7 +206,10 @@ class FhirAdapter:
             q = holder["valueQuantity"]
             if q.get("value") is None:
                 return []
-            value = _convert(param, float(q["value"]), q.get("code") or q.get("unit", ""))
+            unit = q.get("code") or q.get("unit", "")
+            if param.startswith("troponin:"):
+                return self._troponin(pid, t, param, float(q["value"]), unit, src)
+            value = _convert(param, float(q["value"]), unit)
             if not plausible(param, value):
                 self.skipped[f"implausible:{param}"] += 1
                 return []
@@ -228,6 +240,19 @@ class FhirAdapter:
             return [Event(pid, t, MEASUREMENT, "o2_flow", float(value), source=src),
                     Event(pid, t, MEASUREMENT, "o2_supplemental", float(value) > 0, source=src)]
         return [Event(pid, t, MEASUREMENT, param, value, source=src)]
+
+    def _troponin(self, pid, t, param, value, unit, src) -> list[Event]:
+        """Any troponin assay -> multiple of that assay's 99th-percentile URL."""
+        assay = param.split(":", 1)[1]
+        url = self.troponin_urls.get(assay)
+        if not url:
+            self.skipped[f"troponin:no-url-for-{assay}"] += 1
+            return []
+        ratio = round(troponin_ratio(value, unit, url), 3)
+        if not plausible("troponin", ratio):
+            self.skipped["implausible:troponin"] += 1
+            return []
+        return [Event(pid, t, MEASUREMENT, "troponin", ratio, source=f"{src} {assay} {value:g} {unit}".strip())]
 
     def _condition(self, r: dict) -> list[Event]:
         pid = _patient_ref(r)

@@ -71,7 +71,7 @@ def critical_values(v: dict, ctx: dict, cfg: Config) -> list[dict]:
     out, seen = [], set()
     rows = list(THRESHOLDS)
     rows.append(("lipase", ">", 3 * cfg.lipase_uln_u_l, "flag", "lipase > 3x ULN"))
-    rows.append(("troponin_hs", ">", cfg.troponin_url_ng_l, "flag", "hs-troponin > 99th percentile"))
+    rows.append(("troponin", ">", 1.0, "flag", "troponin > 99th percentile URL of its assay"))
     age = ctx.get("age")
     ddimer_cut = max(0.5, age * 0.01) if age and age > 50 else 0.5
     rows.append(("ddimer", ">", ddimer_cut, "flag", f"D-dimer > {ddimer_cut:g} (age-adjusted)"))

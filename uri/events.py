@@ -53,7 +53,9 @@ PARAMETERS: dict[str, tuple[str, str]] = {
     "plt": ("lab", "10*3/uL"),
     "creatinine": ("lab", "mg/dL"),
     "bun": ("lab", "mg/dL"),
-    "troponin_hs": ("lab", "ng/L"),
+    # every assay (high-sensitivity or conventional, T or I) as a multiple of
+    # its own 99th-percentile upper reference limit (Config.troponin_urls)
+    "troponin": ("lab", "x URL"),
     "bnp": ("lab", "pg/mL"),
     "ntprobnp": ("lab", "pg/mL"),
     "ddimer": ("lab", "ug/mL FEU"),
@@ -96,7 +98,7 @@ PLAUSIBLE: dict[str, tuple[float, float]] = {
     "temp_c": (25, 45), "gcs": (3, 15), "fio2": (21, 100), "o2_flow": (0, 80), "urine_ml_hr": (0, 2000),
     "etco2": (0, 150), "pain": (0, 10), "resp_support": (0, 4),
     "lactate": (0.1, 30), "wbc": (0, 500), "hgb": (1, 25), "plt": (0, 3000), "creatinine": (0.1, 30),
-    "bun": (1, 300), "troponin_hs": (0, 1e6), "bnp": (0, 1e5), "ntprobnp": (0, 1e6), "ddimer": (0, 100),
+    "bun": (1, 300), "troponin": (0, 1e5), "bnp": (0, 1e5), "ntprobnp": (0, 1e6), "ddimer": (0, 100),
     "ph": (6.5, 8.0), "pco2": (5, 200), "po2": (10, 800), "na": (90, 200), "k": (1, 10), "hco3": (2, 60),
     "cl": (50, 160), "anion_gap": (-10, 60), "glucose": (10, 3000), "procalcitonin": (0, 1000),
     "crp": (0, 700), "inr": (0.5, 20), "fibrinogen": (20, 1500), "lipase": (0, 50000), "bilirubin": (0, 80),

@@ -84,7 +84,7 @@ RULES: list[Rule] = [
                "guiding resuscitation by decreasing lactate but states no re-measurement interval; it "
                "describes ANDROMEDA-SHOCK measuring lactate every 2 h for the first 8 h of septic shock, "
                "consistent with a short window"),
-    Rule(("troponin_hs",), 6,
+    Rule(("troponin",), 6,
          "serial sampling at 0/1 h or 0/2 h (0/3 h) for myocardial infarction rule-in/out; 6 h outer bound",
          "Collet JP et al. 2020 ESC Guidelines for the management of acute coronary syndromes in patients "
          "presenting without persistent ST-segment elevation. Eur Heart J 2021;42:1289-1367",

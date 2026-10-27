@@ -68,7 +68,7 @@ from . import registry
 from .config import Config
 from .engine import Engine
 from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, plausible, utc
-from .fhir import _convert
+from .fhir import _convert, troponin_ratio
 
 H = timedelta(hours=1)
 FOLLOW_UP = 48 * H
@@ -80,7 +80,7 @@ LAB_LABELS = {
     "lactate": "lactate", "white blood cells": "wbc", "wbc count": "wbc", "hemoglobin": "hgb",
     "platelet count": "plt", "creatinine": "creatinine", "urea nitrogen": "bun", "sodium": "na",
     "potassium": "k", "chloride": "cl", "bicarbonate": "hco3", "anion gap": "anion_gap", "glucose": "glucose",
-    "ph": "ph", "pco2": "pco2", "po2": "po2", "troponin t": "troponin_hs", "ntprobnp": "ntprobnp",
+    "ph": "ph", "pco2": "pco2", "po2": "po2", "troponin t": "troponin:tnt", "troponin i": "troponin:tni", "ntprobnp": "ntprobnp",
     "inr(pt)": "inr", "fibrinogen, functional": "fibrinogen", "lipase": "lipase",
     "bilirubin, total": "bilirubin", "alanine aminotransferase (alt)": "alt",
     "asparate aminotransferase (ast)": "ast", "aspartate aminotransferase (ast)": "ast", "ammonia": "ammonia",
@@ -255,10 +255,11 @@ class Store:
 
 class Extractor:
     def __init__(self, mimic_dir: str, ed_dir: str | None = None, limit: int | None = None, seed: int = 1,
-                 gem_path: str | None = None, log=None):
+                 gem_path: str | None = None, log=None, troponin_urls: dict | None = None):
         self.roots = [d for d in (ed_dir, mimic_dir) if d]
         self.limit, self.seed = limit, seed
         self.gem = load_gem(gem_path)
+        self.troponin_urls = (troponin_urls or Config().troponin_urls)
         self.log = log or sys.stderr
         self.stays: dict[str, Stay] = {}
         self.by_subject: dict[str, list[Stay]] = defaultdict(list)
@@ -390,7 +391,10 @@ class Extractor:
             if t is None or x is None:
                 continue
             unit = (row.get("valueuom") or "").strip().lower()
-            x = x * _MIMIC_FACTORS[(param, unit)] if (param, unit) in _MIMIC_FACTORS else _convert(param, x, unit)
+            if param.startswith("troponin:"):  # any assay -> multiple of its URL
+                x, param = troponin_ratio(x, unit, self.troponin_urls[param.split(":", 1)[1]]), "troponin"
+            else:
+                x = x * _MIMIC_FACTORS[(param, unit)] if (param, unit) in _MIMIC_FACTORS else _convert(param, x, unit)
             if not plausible(param, x):
                 self.counts[f"lab_implausible:{param}"] += 1
                 continue
@@ -596,13 +600,14 @@ def run(args) -> int:
     """Primary analysis excludes direct ED-to-ICU admissions; the sensitivity
     analysis (in ``<out>/sensitivity_direct_icu``) counts them as outcomes.
     Both reuse one extraction."""
-    ex = Extractor(args.mimic_dir, args.ed_dir, args.limit, args.seed, args.icd9_gem)
+    cfg = Config.from_json(args.config) if args.config else Config()
+    ex = Extractor(args.mimic_dir, args.ed_dir, args.limit, args.seed, args.icd9_gem,
+                   troponin_urls=cfg.troponin_urls)
     store = ex.run(args.out)
     with open(os.path.join(args.out, "extract_counts.json"), "w") as fh:
         json.dump(dict(sorted(ex.counts.items())), fh, indent=2)
     n_direct = sum(1 for s in ex.stays.values() if s.direct_icu)
     print(f"direct ED-to-ICU admissions: {n_direct} of {len(ex.stays)} stays", file=sys.stderr)
-    cfg = Config.from_json(args.config) if args.config else None
     rc = analyse(store, ex.stays, args.out, "Primary (direct ICU admissions excluded)", True, cfg, args.bootstrap)
     if not args.no_sensitivity:
         rc = analyse(store, ex.stays, os.path.join(args.out, "sensitivity_direct_icu"),

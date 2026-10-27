@@ -20,7 +20,8 @@ def _engine(args) -> tuple[Engine, FhirAdapter]:
     if args.log:
         fh = open(args.log, "a")
         sinks.append(lambda snap: (fh.write(json.dumps(snap) + "\n"), fh.flush()))
-    return Engine(cfg, sinks), FhirAdapter(cfg.local_codes, icu_patterns=tuple(cfg.icu_location_patterns))
+    return Engine(cfg, sinks), FhirAdapter(cfg.local_codes, icu_patterns=tuple(cfg.icu_location_patterns),
+                                    troponin_urls=cfg.troponin_urls)
 
 
 _printed_outcomes: set = set()
