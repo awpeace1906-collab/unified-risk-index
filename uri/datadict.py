@@ -53,6 +53,8 @@ def render() -> str:
     w("|---|---|---|---|")
     by_param = defaultdict(list)
     for code, param in fhir.LOINC_MAP.items():
+        if param.startswith("troponin:"):  # assay-specific codes, one parameter
+            param, code = "troponin", f"{code} ({param.split(':', 1)[1]})"
         by_param[param].append(code)
     for param, (category, unit) in PARAMETERS.items():
         codes = by_param.get(param, [])
@@ -64,8 +66,14 @@ def render() -> str:
         w(f"| `{param}` | {category} | {unit} | {', '.join(codes) or 'site-specific (see below)'} |")
     w("")
     w("Units are converted on ingest for: temperature (°F), glucose and BUN (mmol/L), creatinine")
-    w("(µmol/L), hemoglobin (g/L), troponin (ng/mL, µg/L), lactate (mg/dL), fibrinogen (g/L),")
-    w("FiO₂ (fraction). Any other unit is taken as canonical.")
+    w("(µmol/L), hemoglobin (g/L), lactate (mg/dL), fibrinogen (g/L), FiO₂ (fraction). Any other")
+    w("unit is taken as canonical.")
+    w("")
+    w("Troponin from any assay (high-sensitivity or conventional, T or I; ng/L, ng/mL or µg/L) is")
+    w("stored as a multiple of that assay's 99th-percentile upper reference limit, so assays are")
+    w("interchangeable. Set each assay's URL to your laboratory's in `troponin_urls`: "
+      + ", ".join(f"{k} {v:g} ng/L" for k, v in cfg.troponin_urls.items()) + " by default. A local")
+    w("troponin code maps with `local_codes`, e.g. `\"urn:oid:...|TROP\": \"troponin:tni\"`.")
     w("")
 
     w("## Site-specific flowsheet rows (map in `local_codes`)")

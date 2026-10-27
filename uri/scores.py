@@ -233,7 +233,7 @@ def crs(v: dict, ctx: dict, factors: set[str], meds: set[str], news2_total: floa
     d["hematologic"] = 0 if hgb is None else 4 if hgb < 7 else 2 if hgb < 10 else 0
 
     cardiac = 0
-    if v.get("troponin_hs") is not None and v["troponin_hs"] > cfg.troponin_url_ng_l:
+    if v.get("troponin") is not None and v["troponin"] > 1:
         cardiac += 3
     if (v.get("bnp") is not None and v["bnp"] > cfg.bnp_severe_pg_ml) or \
        (v.get("ntprobnp") is not None and v["ntprobnp"] > cfg.ntprobnp_severe_pg_ml):
@@ -245,7 +245,7 @@ def crs(v: dict, ctx: dict, factors: set[str], meds: set[str], news2_total: floa
 
     d["frailty_age"] = _frailty_age(ctx, r)
 
-    for lab in ("lactate", "creatinine", "hgb", "ph", "troponin_hs"):
+    for lab in ("lactate", "creatinine", "hgb", "ph", "troponin"):
         if v.get(lab) is None:
             r.missing.append(lab)
     r.total = min(float(cfg.score_max["crs"]), sum(d.values()))
@@ -439,7 +439,7 @@ def crs2(v: dict, ctx: dict, factors: set[str], meds: set[str], cci_total: float
                                    + pts("glucose", lambda x: 2 if x < 60 or x > 400 else 1 if x < 70 or x > 250 else 0))
     d["hematologic"] = min(4, pts("hgb", lambda x: 4 if x < 7 else 2 if x < 10 else 0)
                            + pts("inr", lambda x: 2 if x > 3.0 else 1 if x > 1.5 else 0))
-    cardiac = pts("troponin_hs", lambda x: 3 if x > cfg.troponin_url_ng_l else 0)
+    cardiac = pts("troponin", lambda x: 3 if x > 1 else 0)
     if (v.get("bnp") is not None and v["bnp"] > cfg.bnp_severe_pg_ml) or \
        (v.get("ntprobnp") is not None and v["ntprobnp"] > cfg.ntprobnp_severe_pg_ml):
         cardiac += 2
@@ -450,7 +450,7 @@ def crs2(v: dict, ctx: dict, factors: set[str], meds: set[str], cci_total: float
     d["medication"] = sum(ALL[m].crs_points for m in meds if m in ALL)
     d["frailty_age"] = _frailty_age(ctx, r)
 
-    for lab in ("lactate", "hgb", "troponin_hs", "k", "glucose", "wbc"):
+    for lab in ("lactate", "hgb", "troponin", "k", "glucose", "wbc"):
         if v.get(lab) is None:
             r.missing.append(lab)
     r.total = min(float(cfg.score_max["crs2"]), sum(d.values()))

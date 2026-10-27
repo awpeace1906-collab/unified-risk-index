@@ -81,7 +81,7 @@ def _hypoglycemia(f: Facts):
 
 
 def _acs(f: Facts):
-    return _why(("troponin_rising" in f.signals, "rising hs-troponin"))
+    return _why(("troponin_rising" in f.signals, "rising troponin"))
 
 
 def _adhf(f: Facts):

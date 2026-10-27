@@ -106,7 +106,7 @@ class CompositeTest(unittest.TestCase):
 
 class CrsTest(unittest.TestCase):
     def test_domains(self):
-        v = {"ph": 7.2, "lactate": 4.5, "creatinine": 2.0, "hgb": 6.5, "troponin_hs": 50, "bnp": 900}
+        v = {"ph": 7.2, "lactate": 4.5, "creatinine": 2.0, "hgb": 6.5, "troponin": 3.5, "bnp": 900}
         r = scores.crs(v, {"age": 85, "cfs": 6}, {"chf", "copd"}, {"insulin"}, 0, 0, Config())
         d = r.components
         self.assertEqual((d["metabolic"], d["renal"], d["hematologic"], d["cardiac"]), (8, 2, 4, 5))
@@ -114,7 +114,7 @@ class CrsTest(unittest.TestCase):
         self.assertEqual(r.total, 28.5)
 
     def test_capped_at_30(self):
-        v = {"ph": 7.0, "lactate": 9, "creatinine": 5, "hgb": 5, "troponin_hs": 500, "bnp": 2000}
+        v = {"ph": 7.0, "lactate": 9, "creatinine": 5, "hgb": 5, "troponin": 3.50, "bnp": 2000}
         r = scores.crs(v, {"age": 90, "cfs": 8}, {"chf", "copd", "cad", "ckd", "malignancy"},
                        {"anticoagulant", "insulin", "opioid"}, 20, 3, Config())
         self.assertEqual(r.total, 30)
@@ -175,7 +175,7 @@ class Crs2Test(unittest.TestCase):
 
     def test_domains(self):
         v = {"lactate": 4.5, "ph": 7.15, "k": 6.4, "glucose": 45, "hgb": 8, "inr": 3.5,
-             "troponin_hs": 80, "procalcitonin": 3, "wbc": 22}
+             "troponin": 5.7, "procalcitonin": 3, "wbc": 22}
         r = scores.crs2(v, {"age": 70}, set(), {"opioid"}, 9, Config())
         d = r.components
         self.assertEqual((d["metabolic"], d["electrolyte_glucose"], d["hematologic"], d["cardiac"],

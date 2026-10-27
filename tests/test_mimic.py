@@ -54,6 +54,7 @@ class MimicTest(unittest.TestCase):
     def test_non_blood_labs_and_errors(self):
         vals = {(r[0], r[4]): r[5] for r in self.rows if r[3] == "measurement"}
         self.assertEqual(vals[("10004-30005", "urine_ketones")], "80.0")
+        self.assertEqual(float(vals[("10003-30004", "troponin")]), 42.0)  # TnT 0.42 ng/mL / URL 10 ng/L
         self.assertEqual(vals[("10001-30001", "urine_wbc")], "50.0")  # "21-50" -> upper end
         self.assertNotIn(("10002-30002", "creatinine"), vals)  # 0 mg/dL dropped
         ex_counts = self.counts

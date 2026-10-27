@@ -147,13 +147,15 @@ def aki_kdigo(creatinine: Series, at: datetime, baseline: float | None = None) -
     return None
 
 
-def troponin_delta(trop: Series, at: datetime, url: float) -> Signal | None:
+def troponin_delta(trop: Series, at: datetime) -> Signal | None:
+    """Values are multiples of each assay's URL (any assay); a relative rise
+    >= 20 % to above the URL is a delta."""
     pts = _num(trop, at, 12 * H)
     if len(pts) < 2:
         return None
     first, last = pts[0][1], pts[-1][1]
-    if last > url and first and (last - first) / first >= 0.20:
-        return Signal("troponin_rising", 2, f"hs-troponin rising {first:g} -> {last:g} ng/L")
+    if last > 1 and first and (last - first) / first >= 0.20:
+        return Signal("troponin_rising", 2, f"troponin rising {first:g} -> {last:g} x URL")
     return None
 
 
@@ -251,7 +253,7 @@ def trajectory(series: dict[str, Series], news2_hist: Series, sofa_hist: Series,
         lactate_trend(g("lactate"), at),
         hgb_drop(g("hgb"), at, bval("hgb")),
         aki_kdigo(g("creatinine"), at, bval("creatinine")),
-        troponin_delta(g("troponin_hs"), at, cfg.troponin_url_ng_l),
+        troponin_delta(g("troponin"), at),
         oxygenation_decline(g("spo2"), g("o2_supplemental"), g("fio2"), at),
         rr_rise(g("rr"), at),
         gcs_drop(g("gcs"), at),

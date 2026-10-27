@@ -50,7 +50,7 @@ This is the specification for the retrospective export the Phase 1 derivation re
 | `plt` | lab | 10*3/uL | 777-3 |
 | `creatinine` | lab | mg/dL | 2160-0 |
 | `bun` | lab | mg/dL | 3094-0 |
-| `troponin_hs` | lab | ng/L | 67151-1, 89579-7 |
+| `troponin` | lab | x URL | 67151-1 (hs_tnt), 89579-7 (hs_tni), 6598-7 (tnt), 48425-3 (tnt), 10839-9 (tni), 42757-5 (tni), 49563-0 (tni) |
 | `bnp` | lab | pg/mL | 30934-4, 42637-9 |
 | `ntprobnp` | lab | pg/mL | 33762-6 |
 | `ddimer` | lab | ug/mL FEU | 48065-7 |
@@ -83,8 +83,13 @@ This is the specification for the retrospective export the Phase 1 derivation re
 | `pleural_ph` | lab | [pH] | site-specific (see below) |
 
 Units are converted on ingest for: temperature (°F), glucose and BUN (mmol/L), creatinine
-(µmol/L), hemoglobin (g/L), troponin (ng/mL, µg/L), lactate (mg/dL), fibrinogen (g/L),
-FiO₂ (fraction). Any other unit is taken as canonical.
+(µmol/L), hemoglobin (g/L), lactate (mg/dL), fibrinogen (g/L), FiO₂ (fraction). Any other
+unit is taken as canonical.
+
+Troponin from any assay (high-sensitivity or conventional, T or I; ng/L, ng/mL or µg/L) is
+stored as a multiple of that assay's 99th-percentile upper reference limit, so assays are
+interchangeable. Set each assay's URL to your laboratory's in `troponin_urls`: hs_tnt 14 ng/L, hs_tni 26 ng/L, tnt 10 ng/L, tni 40 ng/L by default. A local
+troponin code maps with `local_codes`, e.g. `"urn:oid:...|TROP": "troponin:tni"`.
 
 ## Site-specific flowsheet rows (map in `local_codes`)
 

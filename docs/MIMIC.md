@@ -38,7 +38,7 @@ python -m uri.mimic run --mimic-dir data/mimic-demo/mimiciv --ed-dir data/mimic-
 
 # the real thing: start with a sample, then the full cohort
 python -m uri.mimic run --mimic-dir ~/physionet/mimiciv/3.1 --ed-dir ~/physionet/mimic-iv-ed/2.2 \
-    --out data/mimic --limit 20000 --icd9-gem ~/cms/2018_I9gem.txt --config examples/mimic_config.json
+    --out data/mimic --limit 20000 --icd9-gem ~/cms/2018_I9gem.txt
 ```
 
 Most of the time goes into reading `labevents` (about 120–160 million rows),
@@ -97,8 +97,10 @@ after the replay.
   outcomes, but those patients go to an ICU, so the ICU transfer captures
   them.
 * **Troponin T in MIMIC is the conventional assay**, not high-sensitivity.
-  Values are converted to ng/L. Set `troponin_url_ng_l` to 10 (Roche 4th
-  generation 99th percentile) in the config (`examples/mimic_config.json`).
+  Like every troponin, it is expressed as a multiple of its assay's
+  99th-percentile URL (`troponin_urls["tnt"]`, default 10 ng/L), so the
+  rules treat it the same as a high-sensitivity result. Conventional assays
+  are less precise near the URL, so small deltas are less reliable.
 * **Direct ICU admissions from the ED.** Some patients go from the ED
   straight to an ICU: shock, intubation in the ED, STEMI to the CCU.
   MIMIC records this as an ICU transfer at ED departure.
