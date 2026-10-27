@@ -49,6 +49,10 @@ python -m unittest discover -s tests -t .
 python -m uri.audit data/phase0_audit.csv          # event rates + decision rule + sample sizes
 python -m uri.samplesize --event-rate 0.06         # Riley criteria, derivation and validation
 python -m uri.datadict > docs/DATA_DICTIONARY.md   # Phase 1 EHR extraction spec
+
+# Retrospective test run on MIMIC-IV-ED (see docs/MIMIC.md; needs PhysioNet access)
+python -m uri.mimic demo-data data/mimic-demo      # synthetic tables for a dry run
+python -m uri.mimic run --mimic-dir <mimiciv> --ed-dir <mimic-iv-ed> --out data/mimic --limit 20000
 ```
 
 Demo output (abridged). In the occult GI bleed, the trend lifts the index
@@ -87,6 +91,7 @@ data, and alerts.
 ## Docs
 
 * [docs/PHASE0.md](docs/PHASE0.md): event-rate audit protocol, sample sizes, and revisions the proposal needs
+* [docs/MIMIC.md](docs/MIMIC.md): one-command Phase 0 audit, replay and calibration on MIMIC-IV-ED, with its limitations
 * [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md): the Phase 1 extraction specification (generated)
 * [docs/STALENESS_RULES.md](docs/STALENESS_RULES.md): per-result staleness windows, **placeholders awaiting PubMed confirmation** (generated)
 * [docs/SCORES_AND_DATA.md](docs/SCORES_AND_DATA.md): which scores are in, which to add, and which data sets to bring in
@@ -119,6 +124,7 @@ uri/
   audit.py      Phase 0 event-rate audit
   samplesize.py Riley sample-size criteria
   datadict.py   generates docs/DATA_DICTIONARY.md
+  mimic.py      MIMIC-IV-ED -> events, audit, replay, calibration
 examples/       config.json and the demo FHIR feed
 templates/      Phase 0 chart-abstraction sheet
 ```

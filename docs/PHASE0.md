@@ -62,6 +62,10 @@ them.
   * plan Phase 2 as multicenter;
   * treat the Phase 4 RCT as likely underpowered.
 
+Before your own audit is ready, `python -m uri.mimic run` produces the same
+report from MIMIC-IV-ED (see [MIMIC.md](MIMIC.md)). It gives a public,
+single-centre estimate of the event rate, not a substitute for your site's.
+
 ## 2. Sample size: the proposal's numbers need revising
 
 `python -m uri.samplesize --event-rate <rate>` applies the Riley 2019 Part II
