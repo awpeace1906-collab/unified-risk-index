@@ -61,8 +61,8 @@ cross RCP's emergency tier:
 
 ```
 08:00  sim-gi_bleed URI   4.8 (LOW)          static  4.8 +traj  0.0 | v1  5.0
-14:00  sim-gi_bleed URI  26.9 (LOW-MODERATE) static 14.9 +traj 12.0 | v1 14.1  signals: news2_rise, shock_index, hgb_drop  causes: GI bleed / hemorrhagic shock
-16:00  sim-gi_bleed URI  61.0 (HIGH)         static 25.9 +traj 18.0 | v1 46.1
+14:00  sim-gi_bleed URI  26.9 (LOW-MODERATE) static 10.9 +traj 16.0 | v1 14.1  signals: news2_rise, shock_index, hgb_drop  causes: GI bleed / hemorrhagic shock
+16:00  sim-gi_bleed URI  61.0 (HIGH)         static 21.9 +traj 18.0 | v1 46.1
 ```
 
 ## What streams in

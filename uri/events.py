@@ -80,7 +80,38 @@ PARAMETERS: dict[str, tuple[str, str]] = {
     "cortisol": ("lab", "ug/dL"),
     "tsh": ("lab", "m[IU]/L"),
     "hba1c": ("lab", "%"),
+    # non-blood specimens (each its own parameter: a urine creatinine is not a
+    # serum creatinine)
+    "urine_ketones": ("lab", "mg/dL"),
+    "urine_wbc": ("lab", "/[HPF]"),
+    "csf_wbc": ("lab", "/uL"),
+    "pleural_ph": ("lab", "[pH]"),
 }
+
+# Values outside these limits are charting or interface errors (a heart rate
+# of 900, a creatinine of 0), not physiology, and are dropped on ingest. The
+# limits are deliberately wide: anything a living patient could show stays.
+PLAUSIBLE: dict[str, tuple[float, float]] = {
+    "hr": (20, 300), "rr": (2, 80), "sbp": (30, 300), "dbp": (10, 200), "map": (20, 250), "spo2": (40, 100),
+    "temp_c": (25, 45), "gcs": (3, 15), "fio2": (21, 100), "o2_flow": (0, 80), "urine_ml_hr": (0, 2000),
+    "etco2": (0, 150), "pain": (0, 10), "resp_support": (0, 4),
+    "lactate": (0.1, 30), "wbc": (0, 500), "hgb": (1, 25), "plt": (0, 3000), "creatinine": (0.1, 30),
+    "bun": (1, 300), "troponin_hs": (0, 1e6), "bnp": (0, 1e5), "ntprobnp": (0, 1e6), "ddimer": (0, 100),
+    "ph": (6.5, 8.0), "pco2": (5, 200), "po2": (10, 800), "na": (90, 200), "k": (1, 10), "hco3": (2, 60),
+    "cl": (50, 160), "anion_gap": (-10, 60), "glucose": (10, 3000), "procalcitonin": (0, 1000),
+    "crp": (0, 700), "inr": (0.5, 20), "fibrinogen": (20, 1500), "lipase": (0, 50000), "bilirubin": (0, 80),
+    "alt": (0, 20000), "ast": (0, 20000), "ammonia": (0, 2000), "mg": (0.2, 10), "phos": (0.2, 20),
+    "cortisol": (0, 200), "tsh": (0, 500), "hba1c": (3, 25),
+    "urine_ketones": (0, 200), "urine_wbc": (0, 1000), "csf_wbc": (0, 100000), "pleural_ph": (6.0, 8.0),
+}
+
+
+def plausible(param: str, value) -> bool:
+    """False for a numeric value outside the physiologically possible range."""
+    lim = PLAUSIBLE.get(param)
+    if lim is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return True
+    return lim[0] <= value <= lim[1]
 
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)  # time for undated facts
 

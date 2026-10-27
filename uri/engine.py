@@ -277,8 +277,9 @@ class Engine:
         dropping = trends.hgb_drop(s.series.get("hgb"), at) is not None
         out = []
         for param, t in times.items():
-            rule = staleness.window(param, v, n2.total if not n2.missing else None,
-                                    bool(n2.flags), dropping)
+            core_missing = any(m in scores.NEWS2_CORE for m in n2.missing)
+            rule = staleness.window(param, v, None if core_missing else n2.total,
+                                    scores.SINGLE_THREE in n2.flags, dropping)
             if rule is None:
                 continue
             hours, why = rule
@@ -434,9 +435,10 @@ class Engine:
     def _alerts(self, s: PatientState, snap: dict, at: datetime) -> list[dict]:
         alerts = []
         prev = s.last
-        # Hold alerts until a full vitals set is in, so the first set arriving
-        # one Observation at a time does not look like a rapid rise.
-        if snap["scores"]["news2"]["missing"]:
+        # Hold alerts until a full set of core vitals is in, so the first set
+        # arriving one Observation at a time does not look like a rapid rise.
+        # Consciousness and oxygen are often not charted; they do not hold alerts.
+        if any(m in scores.NEWS2_CORE for m in snap["scores"]["news2"]["missing"]):
             return alerts
         if prev and scores.BAND_ORDER[snap["band"]] > scores.BAND_ORDER[prev["band"]]:
             alerts.append({"type": "band_escalation", "detail": f"{prev['band']} -> {snap['band']}"})

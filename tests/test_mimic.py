@@ -21,6 +21,7 @@ class MimicTest(unittest.TestCase):
         ex = mimic.Extractor(cls.mimic_dir, cls.ed_dir, gem_path=cls.gem, log=io.StringIO())
         cls.store = ex.run(cls.out)
         cls.stays = ex.stays
+        cls.counts = ex.counts
         db = sqlite3.connect(os.path.join(cls.out, "events.sqlite"))
         cls.rows = db.execute("SELECT pid, t, hist, kind, code, value, source FROM ev").fetchall()
 
@@ -50,9 +51,21 @@ class MimicTest(unittest.TestCase):
         temps = [float(r[5]) for r in self.rows if r[0] == "10001-30001" and r[4] == "temp_c"]
         self.assertEqual(temps[0], 38.0)  # 100.4 F
 
+    def test_non_blood_labs_and_errors(self):
+        vals = {(r[0], r[4]): r[5] for r in self.rows if r[3] == "measurement"}
+        self.assertEqual(vals[("10004-30005", "urine_ketones")], "80.0")
+        self.assertEqual(vals[("10001-30001", "urine_wbc")], "50.0")  # "21-50" -> upper end
+        self.assertNotIn(("10002-30002", "creatinine"), vals)  # 0 mg/dL dropped
+        ex_counts = self.counts
+        self.assertEqual(ex_counts["lab_implausible:creatinine"], 1)
+        self.assertEqual(ex_counts["lab_unmapped_nonblood:Creatinine | Urine"], 1)
+        self.assertEqual(ex_counts["vital_implausible:hr"], 1)
+
     def test_outcomes(self):
         s = self.stays["10001-30001"]
         self.assertEqual(sorted(s.outcomes), ["icu_transfer", "intubation", "vasopressor_start"])
+        self.assertEqual(s.outcomes["vasopressor_start"], s.intime + 3 * mimic.H)  # ED epinephrine
+        self.assertEqual(self.stays["10002-30002"].outcomes, {})  # lidocaine with epinephrine
         s3 = self.stays["10003-30004"]
         self.assertTrue(s3.direct_icu)
         self.assertEqual(sorted(s3.outcomes), ["death", "icu_transfer", "vasopressor_start"])

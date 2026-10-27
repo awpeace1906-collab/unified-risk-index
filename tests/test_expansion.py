@@ -118,6 +118,24 @@ class CriticalCareTest(unittest.TestCase):
         self.assertIn("pressor_escalation", {s["id"] for s in snap["trajectory"]["signals"]})
         self.assertEqual([o["type"] for o in snap["outcomes"]], ["vasopressor_start"])
 
+    def test_local_epinephrine_is_not_a_pressor_start(self):
+        a = FhirAdapter()
+
+        def admin(drug):
+            return a.events({"resourceType": "MedicationAdministration", "id": "1", "status": "completed",
+                             "subject": {"reference": "Patient/p"}, "effectiveDateTime": T0.isoformat(),
+                             "medicationCodeableConcept": {"text": drug}})
+        for drug in ("lidocaine 1% with epinephrine 1:100,000", "phenylephrine 2.5% ophthalmic drops"):
+            self.assertFalse(any(ev.kind == OUTCOME or ev.code == "vasopressor" for ev in admin(drug)), drug)
+        for drug in ("epinephrine 1 mg/10 mL IV push", "epinephrine 4 mg/250 mL infusion"):
+            self.assertTrue(any(ev.kind == OUTCOME for ev in admin(drug)), drug)
+
+    def test_implausible_values_dropped(self):
+        a = FhirAdapter()
+        obs = simulate._obs("p", T0, "8867-4", 900, 1)  # heart rate 900
+        self.assertEqual(a.events(obs), [])
+        self.assertEqual(a.skipped["implausible:hr"], 1)
+
 
 class OutcomeTest(unittest.TestCase):
     def run_resp_failure(self):

@@ -28,11 +28,16 @@ Mapping decisions (see docs/MIMIC.md for the reasoning and limitations):
   ICD-9 codes are mapped through a CMS GEM file when given (``--icd9-gem``).
 * Baseline labs (creatinine, Hgb, platelets, bilirubin, pCO2) are pulled
   from the 365 days before arrival and preloaded as history.
+* Labs: blood results map to the engine's blood parameters; urine, CSF and
+  pleural results map to their own parameters (a urine creatinine never
+  fills the serum creatinine slot). Values outside physiological limits
+  (``events.PLAUSIBLE``) are dropped as charting errors and counted.
 * Outcomes: ICU transfer (``transfers`` care unit), intubation (ICU
   ``procedureevents``), vasopressor start (ICU ``inputevents``; ED ``pyxis``
-  and ward ``emar`` for norepinephrine, vasopressin and dopamine only, since
-  epinephrine and phenylephrine are mostly IM / push / topical outside the
-  ICU), and in-hospital death. MIMIC has no rapid-response record.
+  and ward ``emar`` for norepinephrine, epinephrine, vasopressin, dopamine
+  and phenylephrine, excluding products that act locally: local anaesthetics
+  with epinephrine, ophthalmic / nasal phenylephrine, inhaled racemic
+  epinephrine), and in-hospital death. MIMIC has no rapid-response record.
 
 The PhysioNet data use agreement governs where this data may be processed.
 Run this on a machine the agreement allows. Output stays under ``data/``,
@@ -57,7 +62,7 @@ from datetime import datetime, timedelta
 from . import registry
 from .config import Config
 from .engine import Engine
-from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, utc
+from .events import CONDITION, CONTEXT, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, plausible, utc
 from .fhir import _convert
 
 H = timedelta(hours=1)
@@ -65,7 +70,7 @@ FOLLOW_UP = 48 * H
 BASELINE_LOOKBACK = timedelta(days=365)
 BASELINE_PARAMS = {"creatinine", "hgb", "plt", "bilirubin", "pco2"}
 
-# d_labitems label (lower case) -> parameter; blood specimens only
+# d_labitems label (lower case) -> parameter, for blood specimens
 LAB_LABELS = {
     "lactate": "lactate", "white blood cells": "wbc", "wbc count": "wbc", "hemoglobin": "hgb",
     "platelet count": "plt", "creatinine": "creatinine", "urea nitrogen": "bun", "sodium": "na",
@@ -78,19 +83,27 @@ LAB_LABELS = {
     "procalcitonin": "procalcitonin", "cortisol": "cortisol", "thyroid stimulating hormone": "tsh",
     "% hemoglobin a1c": "hba1c",
 }
+# (label, fluid) -> parameter for non-blood specimens. Confirm the labels
+# against your d_labitems: extract_counts.json lists non-blood labels that
+# did not map, with their row counts.
+FLUID_LABS = {
+    ("ketone", "urine"): "urine_ketones", ("ketones", "urine"): "urine_ketones",
+    ("wbc", "urine"): "urine_wbc",
+    ("wbc, csf", "cerebrospinal fluid"): "csf_wbc", ("wbc", "cerebrospinal fluid"): "csf_wbc",
+    ("ph", "pleural"): "pleural_ph",
+}
+# Text results on urinalysis dipsticks and microscopy
+_KETONE_TEXT = {"neg": 0.0, "negative": 0.0, "tr": 5.0, "trace": 5.0}
 _MIMIC_FACTORS = {("ddimer", "ng/ml feu"): 0.001, ("ddimer", "ng/ml"): 0.001}
 
-# ED vital-sign columns -> parameter, with plausibility limits (charting errors are common)
+# ED vital-sign columns -> parameter
 ED_VITALS = {"heartrate": "hr", "resprate": "rr", "o2sat": "spo2", "sbp": "sbp", "dbp": "dbp",
              "temperature": "temp_c", "pain": "pain"}
-LIMITS = {"hr": (20, 250), "rr": (4, 70), "spo2": (50, 100), "sbp": (40, 300), "dbp": (15, 200),
-          "temp_c": (25, 45), "pain": (0, 10)}
 
 ICU_UNIT_WORDS = ("intensive care", "coronary care", "micu", "sicu", "cvicu")
 PRESSOR_ITEMIDS = {"221906": "norepinephrine", "221289": "epinephrine", "222315": "vasopressin",
                    "221662": "dopamine", "221749": "phenylephrine"}
 INTUBATION_ITEMIDS = {"224385"}
-WARD_PRESSORS = ("norepinephrine", "vasopressin", "dopamine")
 EMAR_GIVEN = {"administered", "started", "new bag", "restarted"}
 
 
@@ -132,8 +145,23 @@ def vital(param: str, raw) -> float | None:
     if param == "temp_c":
         if 77 <= x <= 113:  # MIMIC-IV-ED charts Fahrenheit
             x = round((x - 32) * 5 / 9, 2)
-    lo, hi = LIMITS[param]
-    return x if lo <= x <= hi else None
+    return x if plausible(param, x) else None
+
+
+def lab_value(param: str, row: dict) -> float | None:
+    """valuenum, or for urinalysis the text result (NEG / TR / a range such as 6-10)."""
+    x = _num(row.get("valuenum"))
+    if x is not None:
+        return x
+    text = (row.get("value") or "").strip().lower()
+    if param == "urine_ketones":
+        return _KETONE_TEXT.get(text)
+    if param == "urine_wbc":
+        if text.startswith(">"):
+            return _num(text[1:])
+        if "-" in text:
+            return _num(text.split("-")[-1])  # upper end of the reported range
+    return None
 
 
 def load_gem(path: str | None) -> dict[str, list[str]]:
@@ -330,24 +358,37 @@ class Extractor:
                     continue
                 for col, param in ED_VITALS.items():
                     x = vital(param, row.get(col))
+                    if x is None and _num(row.get(col)) is not None:
+                        self.counts[f"vital_implausible:{param}"] += 1
                     if x is not None:
                         store.add(s, Event(s.pid, t, MEASUREMENT, param, x, source=f"ed/{name}"))
                         self.counts[f"vital:{param}"] += 1
 
     def labs(self, store: Store) -> None:
-        items = {}
+        items, other = {}, {}
         for row in read_rows(self.table("d_labitems")):
-            param = LAB_LABELS.get((row.get("label") or "").strip().lower())
-            if param and (row.get("fluid") or "").strip().lower() == "blood":
+            label = (row.get("label") or "").strip().lower()
+            fluid = (row.get("fluid") or "").strip().lower()
+            param = LAB_LABELS.get(label) if fluid == "blood" else FLUID_LABS.get((label, fluid))
+            if param:
                 items[row["itemid"]] = param
+            elif fluid != "blood":
+                other[row["itemid"]] = f"{row.get('label')} | {row.get('fluid')}"
         for row in self.rows("labevents"):
             param = items.get(row.get("itemid"))
+            if param is None:
+                if row.get("itemid") in other:
+                    self.counts[f"lab_unmapped_nonblood:{other[row['itemid']]}"] += 1
+                continue
             t = ts(row.get("charttime"))
-            x = _num(row.get("valuenum"))
-            if param is None or t is None or x is None:
+            x = lab_value(param, row)
+            if t is None or x is None:
                 continue
             unit = (row.get("valueuom") or "").strip().lower()
             x = x * _MIMIC_FACTORS[(param, unit)] if (param, unit) in _MIMIC_FACTORS else _convert(param, x, unit)
+            if not plausible(param, x):
+                self.counts[f"lab_implausible:{param}"] += 1
+                continue
             for s in self.stays_at(row["subject_id"], t, BASELINE_LOOKBACK):
                 if t < s.intime and param not in BASELINE_PARAMS:
                     continue
@@ -386,7 +427,7 @@ class Extractor:
                     self.counts[f"med:{f.id}"] += 1
                 key = text.lower().split()[0]
                 store.add(s, Event(s.pid, t, MEDICATION, f"rx:{key}", text, source=f"ed/{name}"))
-                if name == "pyxis" and any(p in text.lower() for p in WARD_PRESSORS):
+                if name == "pyxis" and registry.is_systemic_pressor(text):
                     self._outcome(s, "vasopressor_start", t, text, store, "ed/pyxis")
 
     def _outcome(self, s: Stay, kind: str, t: datetime, value, store: Store, source: str) -> None:
@@ -424,7 +465,7 @@ class Extractor:
         for row in self.rows("emar", required=False):
             med = (row.get("medication") or "").lower()
             t = ts(row.get("charttime"))
-            if t and any(p in med for p in WARD_PRESSORS) and (row.get("event_txt") or "").lower() in EMAR_GIVEN:
+            if t and registry.is_systemic_pressor(med) and (row.get("event_txt") or "").lower() in EMAR_GIVEN:
                 for s in self.stays_at(row["subject_id"], t):
                     self._outcome(s, "vasopressor_start", t, med, store, "emar")
         for s in self.stays.values():
@@ -601,7 +642,9 @@ def demo_tables(root: str) -> tuple[str, str]:
             [10004, 30005, at(1), "insulin glargine", "", "", 1, "", ""]])
     _write(f"{ed}/ed/pyxis.csv.gz", ["subject_id", "stay_id", "charttime", "med_rn", "name", "gsn_rn", "gsn"],
            [[10003, 30004, at(2), 1, "Norepinephrine", 1, ""],
-            [10001, 30001, at(1), 1, "Acetaminophen", 1, ""]])
+            [10001, 30001, at(1), 1, "Acetaminophen", 1, ""],
+            [10001, 30001, at(3), 2, "EPINEPHrine", 1, ""],
+            [10002, 30002, at(1), 1, "Lidocaine-EPINEPHrine 1%-1:100,000", 1, ""]])
     _write(f"{mimic}/hosp/patients.csv.gz",
            ["subject_id", "gender", "anchor_age", "anchor_year", "anchor_year_group", "dod"],
            [[10001, "M", 70, 2178, "2014 - 2016", ""], [10002, "F", 40, 2180, "2017 - 2019", ""],
@@ -618,7 +661,8 @@ def demo_tables(root: str) -> tuple[str, str]:
            [[50813, "Lactate", "Blood", "Blood Gas"], [50912, "Creatinine", "Blood", "Chemistry"],
             [51081, "Creatinine", "Urine", "Chemistry"], [51222, "Hemoglobin", "Blood", "Hematology"],
             [51301, "White Blood Cells", "Blood", "Hematology"], [51003, "Troponin T", "Blood", "Chemistry"],
-            [50931, "Glucose", "Blood", "Chemistry"]])
+            [50931, "Glucose", "Blood", "Chemistry"], [51484, "Ketone", "Urine", "Hematology"],
+            [51516, "WBC", "Urine", "Hematology"]])
     lab_cols = ["labevent_id", "subject_id", "hadm_id", "specimen_id", "itemid", "order_provider_id", "charttime",
                 "storetime", "value", "valuenum", "valueuom", "ref_range_lower", "ref_range_upper", "flag",
                 "priority", "comments"]
@@ -627,10 +671,12 @@ def demo_tables(root: str) -> tuple[str, str]:
             (10001, 50813, 1, 3.1, "mmol/L"), (10001, 50912, 1, 2.6, "mg/dL"), (10001, 51301, 1, 17.2, "K/uL"),
             (10001, 50813, 4, 4.6, "mmol/L"), (10001, 51081, 1, 80, "mg/dL"),
             (10003, 50813, 1, 5.2, "mmol/L"), (10003, 51003, 1, 0.42, "ng/mL"),
-            (10004, 50931, 1, 412, "mg/dL"), (10002, 51222, 31, 12.8, "g/dL")]
+            (10004, 50931, 1, 412, "mg/dL"), (10002, 51222, 31, 12.8, "g/dL"),
+            (10004, 51484, 1, 80, "mg/dL"), (10001, 51516, 1, "21-50", "#/hpf"),
+            (10002, 50912, 1, 0, "mg/dL")]  # creatinine 0: interface error
     _write(f"{mimic}/hosp/labevents.csv.gz", lab_cols,
-           [[i, s, "", i, item, "", at(h), at(h), v, v, u, "", "", "", "", ""]
-            for i, (s, item, h, v, u) in enumerate(labs, 1)])
+           [[i, s, "", i, item, "", at(h), at(h), v, v if isinstance(v, (int, float)) else "", u, "", "", "", "",
+             ""] for i, (s, item, h, v, u) in enumerate(labs, 1)])
     _write(f"{mimic}/hosp/diagnoses_icd.csv.gz", ["subject_id", "hadm_id", "seq_num", "icd_code", "icd_version"],
            [[10001, 20000, 1, "N184", 10], [10001, 20000, 2, "I5022", 10],
             [10001, 20001, 1, "A419", 10],  # index admission: coded at discharge, must not leak
