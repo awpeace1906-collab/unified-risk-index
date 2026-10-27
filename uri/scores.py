@@ -21,10 +21,16 @@ class ScoreResult:
     components: dict = field(default_factory=dict)
     missing: list = field(default_factory=list)
     flags: list = field(default_factory=list)
+    # points the missing components could add (NEWS2): total..upper is the
+    # range the true score lies in
+    unscored_max: float = 0
 
     def to_dict(self) -> dict:
-        return {"total": round(self.total, 2), "components": self.components,
-                "missing": self.missing, "flags": self.flags}
+        d = {"total": round(self.total, 2), "components": self.components,
+             "missing": self.missing, "flags": self.flags}
+        if self.unscored_max:
+            d["upper"] = round(self.total + self.unscored_max, 2)
+        return d
 
 
 def avpu_level(v: dict) -> str | None:
@@ -97,9 +103,31 @@ def _news2_temp(x):
     return 3 if x <= 35.0 else 1 if x <= 36.0 else 0 if x <= 38.0 else 1 if x <= 39.0 else 2
 
 
+def oxygen_status(v: dict) -> bool | None:
+    """True on supplemental oxygen, False on documented room air, None when
+    nothing about oxygen is charted (never assumed to be room air)."""
+    signs = [v.get("o2_supplemental"),
+             None if v.get("fio2") is None else v["fio2"] > 21,
+             None if v.get("o2_flow") is None else v["o2_flow"] > 0,
+             None if v.get("resp_support") is None else v["resp_support"] >= 1]
+    known = [x for x in signs if x is not None]
+    return any(known) if known else None
+
+
+# Maximum points per NEWS2 parameter, for the range when some are not charted
+NEWS2_MAX = {"rr": 3, "spo2": 3, "sbp": 3, "hr": 3, "temp_c": 3, "consciousness": 3, "o2": 2}
+NEWS2_CORE = ("rr", "spo2", "sbp", "hr", "temp_c")
+SINGLE_THREE = "single parameter scored 3"
+
+
 def news2(v: dict, hypercapnic_target: bool = False) -> ScoreResult:
+    """NEWS2 (RCP 2017). A parameter that is not charted is not scored and
+    is listed in ``missing``; it is never taken to be normal. The result
+    then carries ``upper``: the score if every missing parameter were
+    maximal, so the true score lies between ``total`` and ``upper``."""
     r = ScoreResult(0)
-    on_o2 = bool(v.get("o2_supplemental")) or (v.get("fio2") is not None and v["fio2"] > 21)
+    o2 = oxygen_status(v)
+    on_o2 = bool(o2)
     parts = {
         "rr": (v.get("rr"), _news2_rr),
         "spo2": (v.get("spo2"), (lambda x: _news2_spo2_scale2(x, on_o2)) if hypercapnic_target
@@ -118,10 +146,17 @@ def news2(v: dict, hypercapnic_target: bool = False) -> ScoreResult:
         r.missing.append("consciousness")
     else:
         r.components["consciousness"] = 0 if level == "A" else 3
-    r.components["o2"] = 2 if on_o2 else 0
+    if o2 is None:
+        r.missing.append("o2")
+    else:
+        r.components["o2"] = 2 if o2 else 0
     r.total = sum(r.components.values())
+    r.unscored_max = sum(NEWS2_MAX[m] for m in r.missing)
     if any(p == 3 for p in r.components.values()):
-        r.flags.append("single parameter scored 3")
+        r.flags.append(SINGLE_THREE)
+    undocumented = [m for m in r.missing if m in ("consciousness", "o2")]
+    if undocumented:
+        r.flags.append("not documented: " + ", ".join(undocumented) + " (not scored; not assumed normal)")
     return r
 
 
@@ -458,7 +493,7 @@ def floor(news2_result: ScoreResult, sofa_delta: float | None, v: dict, meds: se
         tiers.append((61.0, "NEWS2 >= 7 (RCP high: emergency response)"))
     elif n2 >= 5:
         tiers.append((41.0, "NEWS2 5-6 (RCP medium: urgent response)"))
-    elif news2_result.flags:
+    elif SINGLE_THREE in news2_result.flags:
         tiers.append((21.0, "NEWS2 single parameter = 3 (RCP low-medium)"))
     if sofa_delta is not None and sofa_delta >= 2:
         tiers.append((41.0, "acute SOFA rise >= 2 (Sepsis-3 organ dysfunction)"))

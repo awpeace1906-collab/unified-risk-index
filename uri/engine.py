@@ -255,12 +255,14 @@ class Engine:
         open visit and never taken from an earlier one; once the visit has
         closed (discharge, or results stopped), they age out normally."""
         values, times = {}, {}
-        hold = self.cfg.labs_hold_through_episode and start is not None and visit_open
+        in_visit = start is not None and visit_open
+        hold = self.cfg.labs_hold_through_episode and in_visit
+        carry = set(self.cfg.carry_forward_through_visit) if in_visit else set()
         for param, (category, _) in PARAMETERS.items():
             series = s.series.get(param)
             if series is None:
                 continue
-            if category == "lab" and hold:
+            if (category == "lab" and hold) or param in carry:
                 point = series.latest(at)
                 if point is not None and point[0] < start:
                     point = None
@@ -277,8 +279,9 @@ class Engine:
         dropping = trends.hgb_drop(s.series.get("hgb"), at) is not None
         out = []
         for param, t in times.items():
-            rule = staleness.window(param, v, n2.total if not n2.missing else None,
-                                    bool(n2.flags), dropping)
+            core_missing = any(m in scores.NEWS2_CORE for m in n2.missing)
+            rule = staleness.window(param, v, None if core_missing else n2.total,
+                                    scores.SINGLE_THREE in n2.flags, dropping)
             if rule is None:
                 continue
             hours, why = rule
@@ -309,6 +312,11 @@ class Engine:
         s.pressor_hist.add(at, n_pressors)
 
         n2 = scores.news2(v, self._hypercapnic(s, at, factors))
+        carried = [f"{p} ({(at - times[p]) / timedelta(hours=1):.1f} h old)"
+                   for p in self.cfg.carry_forward_through_visit
+                   if p in times and at - times[p] > self.cfg.usable("vital")]
+        if carried:
+            n2.flags.append("carried forward from earlier in this visit: " + ", ".join(carried))
         qs = scores.qsofa(v)
         mw = scores.mews(v)
         so = scores.sofa(v, meds, n_pressors)
@@ -434,9 +442,10 @@ class Engine:
     def _alerts(self, s: PatientState, snap: dict, at: datetime) -> list[dict]:
         alerts = []
         prev = s.last
-        # Hold alerts until a full vitals set is in, so the first set arriving
-        # one Observation at a time does not look like a rapid rise.
-        if snap["scores"]["news2"]["missing"]:
+        # Hold alerts until a full set of core vitals is in, so the first set
+        # arriving one Observation at a time does not look like a rapid rise.
+        # Consciousness and oxygen are often not charted; they do not hold alerts.
+        if any(m in scores.NEWS2_CORE for m in snap["scores"]["news2"]["missing"]):
             return alerts
         if prev and scores.BAND_ORDER[snap["band"]] > scores.BAND_ORDER[prev["band"]]:
             alerts.append({"type": "band_escalation", "detail": f"{prev['band']} -> {snap['band']}"})

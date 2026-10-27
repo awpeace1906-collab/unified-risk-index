@@ -13,7 +13,8 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from . import registry
-from .events import CONDITION, CONTEXT, CONTEXT_KEYS, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, parse_time
+from .events import (CONDITION, CONTEXT, CONTEXT_KEYS, EPOCH, MEASUREMENT, MEDICATION, OUTCOME, Event, parse_time,
+                     plausible)
 
 LOINC = "http://loinc.org"
 
@@ -55,7 +56,7 @@ INPATIENT_CLASSES = {"IMP", "ACUTE", "NONAC"}
 # linked admission). Clinic (AMB) encounters do not: their results are baseline.
 VISIT_CLASSES = {"EMER", "OBSENC"} | INPATIENT_CLASSES
 DEFAULT_ICU_PATTERNS = ("icu", "intensive care", "critical care", "micu", "sicu", "ccu", "cvicu", "neuro icu")
-PRESSOR_START = ("norepinephrine", "epinephrine", "vasopressin", "phenylephrine", "dopamine", "angiotensin ii")
+PRESSOR_START = registry.PRESSOR_AGENTS
 
 # O2 device / ventilation mode text -> resp_support level
 _SUPPORT_WORDS = [
@@ -197,10 +198,16 @@ class FhirAdapter:
             if q.get("value") is None:
                 return []
             value = _convert(param, float(q["value"]), q.get("code") or q.get("unit", ""))
+            if not plausible(param, value):
+                self.skipped[f"implausible:{param}"] += 1
+                return []
         elif "valueBoolean" in holder:
             value = bool(holder["valueBoolean"])
         elif "valueInteger" in holder:
             value = float(holder["valueInteger"])
+            if not plausible(param, value):
+                self.skipped[f"implausible:{param}"] += 1
+                return []
         elif "valueCodeableConcept" in holder or "valueString" in holder:
             cc = holder.get("valueCodeableConcept", {})
             value = holder.get("valueString") or cc.get("text") or \
@@ -269,7 +276,7 @@ class FhirAdapter:
                 out.append(Event(pid, t, CONDITION, "high_dose_diuretic", f"{dose:g} mg {drug}",
                                  active=active, source=src))
         if r["resourceType"] == "MedicationAdministration" and active and t > EPOCH \
-                and any(p in lower for p in PRESSOR_START):
+                and registry.is_systemic_pressor(lower):
             out.append(Event(pid, t, OUTCOME, "vasopressor_start", text.strip(), source=src))
         return out
 

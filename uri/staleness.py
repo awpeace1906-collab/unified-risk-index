@@ -132,6 +132,9 @@ RULES: list[Rule] = [
     Rule(("lipase", "alt", "ast", "ammonia", "cortisol", "tsh"), 72,
          "diagnostic rather than trended in this window", "expert placeholder",
          "liver enzyme ammonia repeat testing interval inpatient"),
+    Rule(("urine_ketones", "urine_wbc", "csf_wbc", "pleural_ph"), 48,
+         "single diagnostic specimens (urine, CSF, pleural fluid), rarely repeated within a visit",
+         "expert placeholder", "urinalysis cerebrospinal fluid pleural fluid repeat testing interval"),
     Rule(("hba1c",), 24 * 90,
          "reflects about 3 months of glycaemia", "expert placeholder", "HbA1c reflects glycemia three months"),
 ]

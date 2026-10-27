@@ -24,7 +24,8 @@ Expert placeholders have no source yet.
 | `wbc`, `inr`, `fibrinogen` | 24 h | daily laboratory cycle; no guideline interval identified | expert placeholder | — | unverified: confirm via PubMed | query: `routine daily laboratory testing intensive care unit frequency` |
 | `bnp`, `ntprobnp`, `procalcitonin`, `crp`, `ddimer` | 48 h | trended over days; procalcitonin-guided antibiotic protocols re-measure every 24-48 h | Schuetz P et al. Procalcitonin to initiate or discontinue antibiotics in acute respiratory tract infections. Cochrane Database Syst Rev 2017;10:CD007498 | PMID 29025194 ([doi](https://doi.org/10.1002/14651858.CD007498.pub3)) | citation confirmed in PubMed; window to check against full text | PMC6485408 returned the abstract only, which states no re-measurement interval; check the trial algorithms in the Cochrane full text. BNP / CRP / D-dimer windows remain expert placeholders; query: `procalcitonin guided antibiotic therapy remeasurement interval Cochrane` |
 | `lipase`, `alt`, `ast`, `ammonia`, `cortisol`, `tsh` | 72 h | diagnostic rather than trended in this window | expert placeholder | — | unverified: confirm via PubMed | query: `liver enzyme ammonia repeat testing interval inpatient` |
+| `urine_ketones`, `urine_wbc`, `csf_wbc`, `pleural_ph` | 48 h | single diagnostic specimens (urine, CSF, pleural fluid), rarely repeated within a visit | expert placeholder | — | unverified: confirm via PubMed | query: `urinalysis cerebrospinal fluid pleural fluid repeat testing interval` |
 | `hba1c` | 2160 h | reflects about 3 months of glycaemia | expert placeholder | — | unverified: confirm via PubMed | query: `HbA1c reflects glycemia three months` |
 
-1 of 12 windows verified; 3 citation confirmed; 1 source not in PubMed; 7 expert placeholders.
+1 of 13 windows verified; 3 citation confirmed; 1 source not in PubMed; 8 expert placeholders.
 

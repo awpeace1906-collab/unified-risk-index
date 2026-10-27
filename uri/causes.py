@@ -60,8 +60,12 @@ def _sepsis(f: Facts):
     fever = t is not None and (t > 38.3 or t < 36)
     wbc = f.gt("wbc", 12) or f.lt("wbc", 4)
     pct = f.gt("procalcitonin", 0.49)
-    infection = fever or wbc or pct
-    return _why((f.qsofa >= 2 and infection, "qSOFA >= 2 with fever / WBC / procalcitonin"),
+    # infection evidence from non-blood specimens: pyuria, CSF pleocytosis,
+    # complicated parapneumonic effusion
+    source = _why((f.gt("urine_wbc", 10), "pyuria"), (f.gt("csf_wbc", 5), "CSF pleocytosis"),
+                  (f.lt("pleural_ph", 7.2), "pleural pH < 7.2"))
+    infection = fever or wbc or pct or bool(source)
+    return _why((f.qsofa >= 2 and infection, "qSOFA >= 2 with " + (source or "fever / WBC / procalcitonin")),
                 ("sofa_rise" in f.signals and infection, "new organ dysfunction (SOFA +2) with infection markers"),
                 (pct and f.gt("procalcitonin", 1.99), "procalcitonin >= 2"),
                 (fever and wbc, "abnormal temperature and WBC"))
@@ -126,6 +130,7 @@ def _adrenal(f: Facts):
 def _dka(f: Facts):
     acid = f.lt("ph", 7.30) or f.lt("hco3", 18) or f.gt("anion_gap", 12)
     return _why((f.gt("glucose", 250) and acid, "glucose > 250 with acidosis / AG"),
+                (f.gt("glucose", 250) and f.gt("urine_ketones", 39), "glucose > 250 with urine ketones >= 40 mg/dL"),
                 (f.gt("glucose", 600), f"glucose {f.v.get('glucose')}"))
 
 

@@ -272,7 +272,23 @@ def factors_for_icd10(code: str) -> list[RiskFactor]:
 LOOP_DIURETIC_FUROSEMIDE_EQ = {"furosemide": 1.0, "bumetanide": 40.0, "torsemide": 2.0}
 
 
+# Vasopressors started as a composite outcome. Products that contain a pressor
+# but act locally are not starts: local anaesthetics with epinephrine,
+# ophthalmic / nasal phenylephrine, inhaled racemic epinephrine.
+PRESSOR_AGENTS = ("norepinephrine", "epinephrine", "vasopressin", "phenylephrine", "dopamine", "angiotensin ii")
+NON_SYSTEMIC = ("lidocaine", "bupivacaine", "ropivacaine", "articaine", "mepivacaine", "prilocaine",
+                "ophth", "opth", "eye", "nasal", "spray", "topical", "drop", "racemic", "racepinephrine", "inhal")
+
+
+def is_systemic_pressor(text: str) -> bool:
+    t = (text or "").lower()
+    return any(p in t for p in PRESSOR_AGENTS) and not any(w in t for w in NON_SYSTEMIC)
+
+
 def medication_classes(text: str) -> list[RiskFactor]:
     """Medication classes whose ingredient keywords appear in ``text``."""
     t = text.lower()
-    return [f for f in MEDICATIONS if any(i in t for i in f.ingredients)]
+    out = [f for f in MEDICATIONS if any(i in t for i in f.ingredients)]
+    if any(w in t for w in NON_SYSTEMIC):
+        out = [f for f in out if f.id != "vasopressor"]
+    return out

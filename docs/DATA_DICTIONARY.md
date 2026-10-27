@@ -77,6 +77,10 @@ This is the specification for the retrospective export the Phase 1 derivation re
 | `cortisol` | lab | ug/dL | 2143-6 |
 | `tsh` | lab | m[IU]/L | 3016-3 |
 | `hba1c` | lab | % | 4548-4 |
+| `urine_ketones` | lab | mg/dL | site-specific (see below) |
+| `urine_wbc` | lab | /[HPF] | site-specific (see below) |
+| `csf_wbc` | lab | /uL | site-specific (see below) |
+| `pleural_ph` | lab | [pH] | site-specific (see below) |
 
 Units are converted on ingest for: temperature (°F), glucose and BUN (mmol/L), creatinine
 (µmol/L), hemoglobin (g/L), troponin (ng/mL, µg/L), lactate (mg/dL), fibrinogen (g/L),

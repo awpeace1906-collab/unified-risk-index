@@ -8,9 +8,24 @@ NORMAL = {"hr": 75, "rr": 16, "sbp": 125, "dbp": 80, "spo2": 98, "temp_c": 37.0,
 
 class News2Test(unittest.TestCase):
     def test_normal_is_zero(self):
-        r = scores.news2(NORMAL)
+        r = scores.news2({**NORMAL, "o2_supplemental": False})
         self.assertEqual(r.total, 0)
         self.assertEqual(r.missing, [])
+        self.assertNotIn("upper", r.to_dict())
+
+    def test_undocumented_gcs_and_oxygen_are_not_normal(self):
+        v = {k: x for k, x in NORMAL.items() if k != "gcs"}
+        r = scores.news2(v)
+        self.assertEqual(sorted(r.missing), ["consciousness", "o2"])
+        self.assertNotIn("o2", r.components)
+        self.assertEqual(r.to_dict()["upper"], 5)  # up to 3 (consciousness) + 2 (oxygen)
+        self.assertTrue(any("not assumed normal" in f for f in r.flags))
+        self.assertNotIn(scores.SINGLE_THREE, r.flags)
+
+    def test_oxygen_inferred_from_flow_fio2_or_device(self):
+        for extra in ({"o2_flow": 2}, {"fio2": 40}, {"resp_support": 1}):
+            self.assertEqual(scores.news2({**NORMAL, **extra}).components["o2"], 2, extra)
+        self.assertEqual(scores.news2({**NORMAL, "fio2": 21}).components["o2"], 0)
 
     def test_rr_bands(self):
         for rr, pts in [(8, 3), (9, 1), (11, 1), (12, 0), (20, 0), (21, 2), (24, 2), (25, 3)]:
