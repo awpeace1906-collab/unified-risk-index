@@ -81,6 +81,13 @@ class DerivedFactorTest(unittest.TestCase):
                                          Event("p", EPOCH, CONDITION, "dvt_pe")])
         self.assertIn("pe_risk", factor_ids(e.latest("p")))
 
+    def test_ckd_and_dm1_are_model_candidates(self):
+        from uri.model import features
+        e = Engine()
+        e.ingest_many(vitals("p", T0) + [Event("p", EPOCH, CONDITION, "dm1")])
+        x = features(e.latest("p"))
+        self.assertEqual((x["dm1"], x["ckd"]), (1.0, 0.0))
+
     def test_frailty_local_code_becomes_context(self):
         a = FhirAdapter({"urn:local|CFS": "cfs"})
         obs = {**simulate._obs("p", T0, "x", 6, 1), "code": {"coding": [{"system": "urn:local", "code": "CFS"}]},

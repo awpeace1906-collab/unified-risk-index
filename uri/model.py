@@ -18,6 +18,7 @@ FEATURES = (
     "news2", "qsofa", "mews", "sofa", "sofa_rise", "crs", "crs2", "charlson",
     "trajectory", "age", "organs_measured", "critical_values", "resp_support", "n_pressors", "sofa_acute",
     "hours_since_vitals", "hours_since_lactate", "hours_since_hgb", "hours_since_creatinine",
+    "ckd", "dm1",
 )
 
 
@@ -25,6 +26,7 @@ def features(snap: dict) -> dict:
     """Model inputs from a snapshot (the same dict the engine emits and logs)."""
     sc = snap["scores"]
     age = snap.get("context", {}).get("age")
+    factor_ids = {f["id"] for f in snap.get("risk_factors", [])}
     return {
         "news2": sc["news2"]["total"],
         "qsofa": sc["qsofa"]["total"],
@@ -49,6 +51,9 @@ def features(snap: dict) -> dict:
         # instead of relying only on the fixed staleness windows.
         **{f"hours_since_{k}": snap.get("context", {}).get("hours_since", {}).get(k, 72.0)
            for k in ("vitals", "lactate", "hgb", "creatinine")},
+        # Candidate predictors the v1 workbook and manuscript disagree on (CKD
+        # vs type 1 DM); Phase 1 decides whether either earns weight.
+        **{f: float(f in factor_ids) for f in ("ckd", "dm1")},
     }
 
 
