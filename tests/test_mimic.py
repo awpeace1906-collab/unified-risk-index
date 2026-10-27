@@ -104,5 +104,13 @@ class MimicRunTest(unittest.TestCase):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
                 mimic.main(["run", "--mimic-dir", m, "--ed-dir", e, "--out", out, "--bootstrap", "0"])
-            self.assertIn("Eligible admissions: 4", buf.getvalue())
+            text = buf.getvalue()
+            # primary: the direct CCU admission is excluded; sensitivity: counted
+            primary, sensitivity = text.split("Sensitivity (direct ICU admissions counted", 1)
+            self.assertIn("Eligible admissions: 3   excluded: 2", primary)
+            self.assertIn("Eligible admissions: 4   excluded: 1", sensitivity)
             self.assertTrue(os.path.exists(os.path.join(out, "snapshots.jsonl")))
+            with open(os.path.join(out, "outcomes.csv")) as fh:
+                self.assertNotIn("10003-30004", fh.read())
+            with open(os.path.join(out, "sensitivity_direct_icu", "outcomes.csv")) as fh:
+                self.assertIn("10003-30004", fh.read())

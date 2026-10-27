@@ -1,7 +1,7 @@
 """MIMIC-IV-ED + MIMIC-IV -> URI event stream, Phase 0 audit, replay and calibration.
 
     python -m uri.mimic run --mimic-dir ~/physionet/mimiciv/3.1 --ed-dir ~/physionet/mimic-iv-ed/2.2 \\
-        --out data/mimic [--limit 20000] [--seed 1] [--icd9-gem 2018_I9gem.txt] [--exclude-direct-icu]
+        --out data/mimic [--limit 20000] [--seed 1] [--icd9-gem 2018_I9gem.txt] [--no-sensitivity]
     python -m uri.mimic demo-data data/mimic-demo     # synthetic tables in the MIMIC layout, for a dry run
 
 ``run`` does, in one pass:
@@ -19,6 +19,11 @@
    ``outcomes.csv`` and ``encounters.csv``.
 4. **calibrate** (if numpy is installed): ``model.json`` and the AUROC report
    against NEWS2 alone and URI v1.
+
+Steps 2-4 run twice from the one extraction: the primary analysis excludes
+stays admitted from the ED straight to an ICU (the proposal's outcome is
+*unplanned* ICU transfer); the sensitivity analysis, in
+``<out>/sensitivity_direct_icu``, counts them as outcomes.
 
 Mapping decisions (see docs/MIMIC.md for the reasoning and limitations):
 
@@ -563,30 +568,46 @@ def replay(store: Store, stays: dict[str, Stay], out_dir: str, cfg: Config | Non
     return {"replayed": n}
 
 
-def run(args) -> int:
+def analyse(store: Store, stays: dict[str, Stay], out_dir: str, title: str, exclude_direct_icu: bool,
+            cfg: Config | None, bootstrap: int) -> int:
+    """Phase 0 audit, replay and calibration for one cohort definition."""
     from . import audit
-    ex = Extractor(args.mimic_dir, args.ed_dir, args.limit, args.seed, args.icd9_gem)
-    store = ex.run(args.out)
-    stays = sorted(ex.stays.values(), key=lambda s: s.intime)
-    audit_path = os.path.join(args.out, "audit.csv")
-    write_audit(stays, audit_path, args.exclude_direct_icu)
-    with open(os.path.join(args.out, "extract_counts.json"), "w") as fh:
-        json.dump(dict(sorted(ex.counts.items())), fh, indent=2)
-    print("\n=== Phase 0 audit (MIMIC-IV-ED) ===")
+    os.makedirs(out_dir, exist_ok=True)
+    ordered = sorted(stays.values(), key=lambda s: s.intime)
+    audit_path = os.path.join(out_dir, "audit.csv")
+    write_audit(ordered, audit_path, exclude_direct_icu)
+    print(f"\n=== {title}: Phase 0 audit (MIMIC-IV-ED) ===")
     audit.main([audit_path])
-    exclude = {s.pid for s in stays if args.exclude_direct_icu and s.direct_icu}
-    cfg = Config.from_json(args.config) if args.config else None
-    replay(store, ex.stays, args.out, cfg, exclude)
+    exclude = {s.pid for s in ordered if exclude_direct_icu and s.direct_icu}
+    replay(store, stays, out_dir, cfg, exclude)
     try:
         from . import calibrate
     except ImportError:
         print("numpy not installed: skipping calibration", file=sys.stderr)
         return 0
-    print("\n=== Calibration (landmark model vs NEWS2 and URI v1) ===")
-    return calibrate.main(["--snapshots", os.path.join(args.out, "snapshots.jsonl"),
-                           "--outcomes", os.path.join(args.out, "outcomes.csv"),
-                           "--encounters", os.path.join(args.out, "encounters.csv"),
-                           "--out", os.path.join(args.out, "model.json"), "--bootstrap", str(args.bootstrap)])
+    print(f"\n=== {title}: calibration (landmark model vs NEWS2 and URI v1) ===")
+    return calibrate.main(["--snapshots", os.path.join(out_dir, "snapshots.jsonl"),
+                           "--outcomes", os.path.join(out_dir, "outcomes.csv"),
+                           "--encounters", os.path.join(out_dir, "encounters.csv"),
+                           "--out", os.path.join(out_dir, "model.json"), "--bootstrap", str(bootstrap)])
+
+
+def run(args) -> int:
+    """Primary analysis excludes direct ED-to-ICU admissions; the sensitivity
+    analysis (in ``<out>/sensitivity_direct_icu``) counts them as outcomes.
+    Both reuse one extraction."""
+    ex = Extractor(args.mimic_dir, args.ed_dir, args.limit, args.seed, args.icd9_gem)
+    store = ex.run(args.out)
+    with open(os.path.join(args.out, "extract_counts.json"), "w") as fh:
+        json.dump(dict(sorted(ex.counts.items())), fh, indent=2)
+    n_direct = sum(1 for s in ex.stays.values() if s.direct_icu)
+    print(f"direct ED-to-ICU admissions: {n_direct} of {len(ex.stays)} stays", file=sys.stderr)
+    cfg = Config.from_json(args.config) if args.config else None
+    rc = analyse(store, ex.stays, args.out, "Primary (direct ICU admissions excluded)", True, cfg, args.bootstrap)
+    if not args.no_sensitivity:
+        rc = analyse(store, ex.stays, os.path.join(args.out, "sensitivity_direct_icu"),
+                     "Sensitivity (direct ICU admissions counted as outcomes)", False, cfg, args.bootstrap) or rc
+    return rc
 
 
 # --- synthetic tables in the MIMIC layout ------------------------------------------
@@ -714,8 +735,8 @@ def main(argv=None) -> int:
     r.add_argument("--limit", type=int, help="random sample of this many ED stays")
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--icd9-gem", help="CMS ICD-9 -> ICD-10 GEM file (2018_I9gem.txt) for pre-2015 diagnoses")
-    r.add_argument("--exclude-direct-icu", action="store_true",
-                   help="exclude stays admitted from the ED straight to an ICU (planned ICU admissions)")
+    r.add_argument("--no-sensitivity", action="store_true",
+                   help="skip the sensitivity analysis that counts direct ED-to-ICU admissions as outcomes")
     r.add_argument("--config", help="JSON config overriding engine defaults")
     r.add_argument("--bootstrap", type=int, default=200)
     d = sub.add_parser("demo-data", help="write synthetic tables in the MIMIC layout")

@@ -57,6 +57,7 @@ after the replay.
 | `snapshots.jsonl` | One compact engine snapshot per stay-hour, 0–48 h |
 | `outcomes.csv`, `encounters.csv` | Composite outcomes as the engine observed them; follow-up ends for censoring |
 | `model.json` + printed report | Landmark model per horizon; AUROC (optimism-corrected with `--bootstrap`) vs NEWS2 and URI v1 |
+| `sensitivity_direct_icu/` | The same audit, replay and calibration files with direct ED-to-ICU admissions counted as outcomes |
 
 ## 4. How the tables map
 
@@ -100,18 +101,16 @@ after the replay.
   generation 99th percentile) in the config (`examples/mimic_config.json`).
 * **Direct ICU admissions from the ED.** Some patients go from the ED
   straight to an ICU: shock, intubation in the ED, STEMI to the CCU.
-  MIMIC records this as an ICU transfer at ED departure. There are two
-  ways to treat it:
-  * **Count it (default).** It is a real decompensation, and the index
-    streams during the ED stay, where it could have flagged the patient.
-    But many of these patients are critical at triage. They are easy
-    cases that raise the event rate and flatter the AUROC.
-  * **Exclude it (`--exclude-direct-icu`).** The cohort becomes patients
-    admitted to a ward or step-down unit, and the outcome is deterioration
-    *after* that decision. This matches the proposal's "unplanned ICU
-    transfer" and Delgado 2013's ED-admission cohort.
-
-  Report the excluded version as the primary analysis and the counted
-  version as a sensitivity analysis.
+  MIMIC records this as an ICU transfer at ED departure.
+  * **Primary analysis: excluded.** The cohort is patients admitted to a
+    ward or step-down unit, and the outcome is deterioration *after* that
+    decision. This matches the proposal's "unplanned ICU transfer" and
+    Delgado 2013's ED-admission cohort. Many direct ICU admissions are
+    critical at triage; counting them would add easy cases that raise the
+    event rate and flatter the AUROC.
+  * **Sensitivity analysis: counted as outcomes**
+    (`<out>/sensitivity_direct_icu`). It is a real decompensation, and the
+    index streams during the ED stay, where it could have flagged the
+    patient. `--no-sensitivity` skips it.
 * **Single centre, academic, 2011–2019, dates shifted per patient.**
   External-validation conclusions need a second site (your Phase 2).
