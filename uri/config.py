@@ -76,6 +76,14 @@ class Config:
     # long ago it was drawn (reported as stale per uri.staleness); a
     # lab from a previous episode is never used as a current value.
     labs_hold_through_episode: bool = True
+    # The two NEWS2 inputs that are often charted once and not repeated
+    # (consciousness and oxygen status) carry forward the same way: the last
+    # value documented in the current visit is used until a new one is
+    # charted, never one from a previous visit. Older than the vital-sign
+    # window, it is flagged as carried forward and reported stale. [] turns
+    # this off (they then age out after usable_hours["vital"]).
+    carry_forward_through_visit: list = field(default_factory=lambda: [
+        "gcs", "avpu", "o2_supplemental", "o2_flow", "fio2", "resp_support"])
     baseline_lookback_days: int = 365
     # Score SOFA in the composite as acute change above the pre-episode
     # baseline (Sepsis-3), so chronic organ dysfunction is not counted as new.

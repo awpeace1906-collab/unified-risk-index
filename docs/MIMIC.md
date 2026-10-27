@@ -81,11 +81,13 @@ after the replay.
   After a ward admission, the engine sees labs but no vitals until ICU
   transfer, so trajectory signals are weaker there than they would be with
   your EHR's flowsheets. The result is conservative for the trend layer.
-* **No GCS, O₂ device or FiO₂ in the ED tables.** The engine does not
-  assume them normal. NEWS2 lists them as missing, reports the range the
-  true score lies in (`total` to `upper`), and the model gets the count of
-  undocumented NEWS2 parameters as a feature. SOFA's CNS component is
-  missing. MIMIC NEWS2 totals are therefore lower bounds.
+* **No GCS, O₂ device or FiO₂ in the ED tables.** Within a visit the
+  engine carries the last documented value forward, but MIMIC's ED tables
+  have none to carry, and the engine does not assume them normal. NEWS2
+  lists them as missing and reports the range the true score lies in
+  (`total` to `upper`). The model gets the count of undocumented NEWS2
+  items as a feature. SOFA's CNS component is missing. MIMIC NEWS2 totals
+  are therefore lower bounds.
 * **IM epinephrine for anaphylaxis** in the ED counts as a vasopressor start;
   `pyxis` has no route. Add `hosp/emar_detail` route filtering if
   anaphylaxis turns out to be common in the cohort.

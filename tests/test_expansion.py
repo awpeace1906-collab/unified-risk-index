@@ -130,6 +130,28 @@ class CriticalCareTest(unittest.TestCase):
         for drug in ("epinephrine 1 mg/10 mL IV push", "epinephrine 4 mg/250 mL infusion"):
             self.assertTrue(any(ev.kind == OUTCOME for ev in admin(drug)), drug)
 
+    def test_gcs_and_oxygen_carry_forward_within_visit_only(self):
+        core = {k: x for k, x in VITALS.items() if k != "gcs"}
+
+        def core_vitals(t):
+            return [Event("p", t, MEASUREMENT, k, x) for k, x in core.items()]
+        e = Engine()
+        e.ingest_many(core_vitals(T0) + [Event("p", T0, MEASUREMENT, "gcs", 12),
+                                         Event("p", T0, MEASUREMENT, "o2_flow", 2),
+                                         Event("p", T0, MEASUREMENT, "o2_supplemental", True)])
+        # 20 h later, same visit (results kept coming): neither re-charted
+        for h in range(4, 21, 4):
+            snap = e.ingest_many(core_vitals(T0 + h * H))["p"]
+        n2 = snap["scores"]["news2"]
+        self.assertEqual(n2["components"]["consciousness"], 3)  # GCS 12 carried forward
+        self.assertEqual(n2["components"]["o2"], 2)
+        self.assertNotIn("upper", n2)
+        self.assertTrue(any("carried forward" in f and "gcs (20.0 h old)" in f for f in n2["flags"]))
+        self.assertIn("gcs", {x["parameter"] for x in snap["data_quality"]["stale"]})
+        # a new visit (results gap > 36 h): not carried into it
+        snap = e.ingest_many(core_vitals(T0 + 80 * H))["p"]
+        self.assertEqual(sorted(snap["scores"]["news2"]["missing"]), ["consciousness", "o2"])
+
     def test_implausible_values_dropped(self):
         a = FhirAdapter()
         obs = simulate._obs("p", T0, "8867-4", 900, 1)  # heart rate 900

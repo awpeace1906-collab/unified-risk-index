@@ -255,12 +255,14 @@ class Engine:
         open visit and never taken from an earlier one; once the visit has
         closed (discharge, or results stopped), they age out normally."""
         values, times = {}, {}
-        hold = self.cfg.labs_hold_through_episode and start is not None and visit_open
+        in_visit = start is not None and visit_open
+        hold = self.cfg.labs_hold_through_episode and in_visit
+        carry = set(self.cfg.carry_forward_through_visit) if in_visit else set()
         for param, (category, _) in PARAMETERS.items():
             series = s.series.get(param)
             if series is None:
                 continue
-            if category == "lab" and hold:
+            if (category == "lab" and hold) or param in carry:
                 point = series.latest(at)
                 if point is not None and point[0] < start:
                     point = None
@@ -310,6 +312,11 @@ class Engine:
         s.pressor_hist.add(at, n_pressors)
 
         n2 = scores.news2(v, self._hypercapnic(s, at, factors))
+        carried = [f"{p} ({(at - times[p]) / timedelta(hours=1):.1f} h old)"
+                   for p in self.cfg.carry_forward_through_visit
+                   if p in times and at - times[p] > self.cfg.usable("vital")]
+        if carried:
+            n2.flags.append("carried forward from earlier in this visit: " + ", ".join(carried))
         qs = scores.qsofa(v)
         mw = scores.mews(v)
         so = scores.sofa(v, meds, n_pressors)

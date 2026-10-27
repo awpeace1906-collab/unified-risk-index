@@ -255,6 +255,13 @@ patient's latest episode.
   (discharge, or results stopping for more than 36 h without encounter
   data), labs age out after 48 h. `Engine.tick(now)` recomputes without new
   data.
+* **Consciousness and oxygen status** (GCS / AVPU; O₂ flow, FiO₂, device)
+  are often charted once and not repeated. They carry forward like labs:
+  the last value documented in this visit is used until a new one is
+  charted, never one from a previous visit (`carry_forward_through_visit`).
+  Older than 12 h, NEWS2 flags it as carried forward and it is reported
+  stale. Never documented in the visit, it is missing, not assumed normal:
+  NEWS2 then reports `upper`, its value if every missing item were maximal.
 * **Staleness** is decided per result (`uri/staleness.py`,
   [STALENESS_RULES.md](STALENESS_RULES.md)):
   * vitals follow the NEWS2 minimum monitoring frequency (12 h at NEWS2 0
